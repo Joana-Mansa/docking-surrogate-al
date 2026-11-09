@@ -1,0 +1,82 @@
+[project]
+name = "docking-surrogate-al"
+version = "0.1.0"
+description = "GNN surrogate for molecular docking scores with uncertainty-guided active learning"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Joana Owusu-Appiah" }]
+requires-python = ">=3.11,<3.12"
+
+# Dependency pinning policy
+# ------------------------
+# Every runtime dependency is pinned to an exact version. The CUDA build of
+# torch is pinned explicitly to the cu128 wheel (CUDA 12.8); see
+# [tool.uv.sources] below and the "Hardware requirements" section of the
+# README. torch-geometric itself is pure Python and is installed from PyPI,
+# but it dispatches to the CUDA kernels of whichever torch build is present,
+# so the torch pin is what fixes the CUDA version for the whole project.
+dependencies = [
+    "torch==2.9.1+cu128",
+    "torch-geometric==2.8.1",
+    "rdkit==2026.3.6",
+    "numpy==2.5.4",
+    "scipy==1.18.1",
+    "pandas==3.1.1",
+    "matplotlib==3.11.2",
+    "pyyaml==6.0.3",
+    "requests==2.34.2",
+    "tqdm==4.70.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.2.0",
+    "ruff==0.14.2",
+    "mypy==1.18.2",
+]
+
+[project.scripts]
+dsal = "docking_surrogate_al.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/docking_surrogate_al"]
+
+# --- uv configuration -------------------------------------------------------
+# The CUDA wheels do not live on PyPI, so torch is pulled from the PyTorch
+# cu128 index explicitly. CPU-only users (CI, first-time users without a GPU)
+# should install with the `cpu` extra index instead; see README.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ANN", "D"]
+ignore = ["D203", "D213", "ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D", "ANN"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: tests that invoke the docking oracle or train for many epochs",
+    "requires_smina: tests that need a smina binary on PATH",
+]

@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# uv
+# uv.lock IS committed deliberately: it is the reproducibility guarantee.
+
+# Run outputs. Everything under runs/ is regenerable from a config + seed.
+runs/
+figures/
+*.log
+
+# Data. The small frozen smoke inputs and the prepared target ARE committed
+# (see data/smoke/ and data/targets/); bulk downloads and caches are not.
+data/raw/
+data/processed/
+data/cache/
+data/chembl/
+*.sdf
+*.pdbqt.gz
+
+# The docking cache is large, machine-specific and incrementally written.
+# It is intentionally not version controlled.
+cache/
+*.sqlite
+*.sqlite-journal
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

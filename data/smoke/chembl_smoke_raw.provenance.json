@@ -1,0 +1,9 @@
+{
+  "chembl_release": "ChEMBL_37",
+  "frozen_on": "2026-11-09",
+  "note": "Single-component SMILES of length 10-120 chars, sorted by ChEMBL ID. Regenerate with scripts/freeze_smoke_set.py.",
+  "query": "https://www.ebi.ac.uk/chembl/api/data/molecule.json?molecule_type=Small+molecule&molecule_properties__mw_freebase__gte=200&molecule_properties__mw_freebase__lte=500&molecule_properties__alogp__lte=5&molecule_properties__num_ro5_violations=0",
+  "requested_n": 200,
+  "returned_n": 200,
+  "source": "chembl_rest_api"
+}

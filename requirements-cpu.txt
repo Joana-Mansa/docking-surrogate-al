@@ -1,0 +1,23 @@
+# CPU-only dependency set.
+#
+# pyproject.toml pins the CUDA build of torch (torch==2.9.1+cu128), which is
+# what the project targets and what the README documents. That pin cannot be
+# installed on a machine without CUDA wheels available, so CI and GPU-less
+# users install from this file instead. The versions match pyproject exactly
+# apart from the torch build suffix.
+#
+#   pip install -r requirements-cpu.txt
+#
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch==2.9.1+cpu
+torch-geometric==2.8.1
+rdkit==2026.3.6
+numpy==2.5.4
+scipy==1.18.1
+pandas==3.1.1
+matplotlib==3.11.2
+pyyaml==6.0.3
+requests==2.34.2
+tqdm==4.70.1
+pytest==9.2.0

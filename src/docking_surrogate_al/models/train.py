@@ -160,6 +160,11 @@ def train_model(
 
     with StageTimer("train", device) as timer:
         for epoch in range(state.epoch + 1, total_epochs + 1):
+            # Shuffling is seeded per epoch, not once per loader. The loader's
+            # generator is recreated on resume, so without this epoch 4 of a
+            # resumed run would shuffle like epoch 1 of a fresh one and the
+            # resumed run would silently diverge from an uninterrupted one.
+            _seed_epoch_shuffle(train_loader, seed, epoch)
             train_loss, n_seen = _train_one_epoch(
                 net, train_loader, optimizer, criterion, scaler, device, use_amp, cfg.train.grad_clip
             )
@@ -239,6 +244,20 @@ def train_model(
         amp_enabled=use_amp,
         timing=timer.summary(),
     )
+
+
+def _seed_epoch_shuffle(loader: DataLoader, seed: int, epoch: int) -> None:
+    """Reseed a shuffled loader's generator deterministically for this epoch.
+
+    Makes the batch order a pure function of ``(seed, epoch)`` rather than of
+    how many epochs this particular loader object has already served, which is
+    what lets a resumed run reproduce an uninterrupted one exactly.
+    """
+    generator = getattr(loader, "generator", None)
+    if generator is None:
+        return
+    # Mixed into a 63-bit value so distinct (seed, epoch) pairs stay distinct.
+    generator.manual_seed((seed * 1_000_003 + epoch) % (2**63 - 1))
 
 
 def _train_one_epoch(
@@ -321,5 +340,5 @@ def predict_mean(
         with torch.autocast(device_type=device.type, enabled=use_amp):
             out = net(batch.x, batch.edge_index, batch.edge_attr, batch.batch)
         predictions.append(out.float().cpu().numpy())
-        indices.append(batch.pool_index.view(-1).cpu().numpy())
+        indices.append(batch.pool_id.view(-1).cpu().numpy())
     return np.concatenate(predictions), np.concatenate(indices)

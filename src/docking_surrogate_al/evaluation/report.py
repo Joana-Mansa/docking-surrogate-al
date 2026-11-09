@@ -90,7 +90,12 @@ class SplitEvaluation:
     def summary_line(self) -> str:
         """One-line human summary for the log."""
         parts = [f"[{self.split}] n={self.n_test}"]
-        for key in ("rmse", "spearman_rho", "ef_1", "ef_5", "precision_at_100"):
+        # Enrichment and precision keys depend on the configured fractions and
+        # k values, so they are discovered rather than hardcoded.
+        keys = ["rmse", "spearman_rho"]
+        keys += sorted(k for k in self.estimates if k.startswith("ef_"))
+        keys += sorted(k for k in self.estimates if k.startswith("precision_at_"))
+        for key in keys:
             if key in self.estimates:
                 parts.append(f"{key}={self.estimates[key].format()}")
         parts.append(f"ECE={self.calibration.expected_calibration_error:.3f}")

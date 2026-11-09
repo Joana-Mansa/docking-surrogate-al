@@ -1,0 +1,111 @@
+# Default configuration: the full experiment.
+#
+# Hardware target: a single mid-range GPU. The defaults below are tuned for a
+# ~6 GB card (RTX 3050 laptop), which is the machine this was developed on, so
+# a clean clone trains out of the box on modest hardware. For the ~16 GB card
+# the project was specified against, layer configs/gpu_16gb.yaml on top.
+#
+# Every value here is a resolved default; omitted keys fall back to the
+# dataclass defaults in src/docking_surrogate_al/config.py and are recorded in
+# the run manifest regardless.
+
+run:
+  name: default
+  seed: 0
+  output_dir: runs
+  # "cuda" requires a GPU and fails loudly without one. "auto" falls back to
+  # CPU with a warning. Never silently inferred elsewhere.
+  device: auto
+
+data:
+  source: chembl
+  raw_path: data/raw/molecules_raw.csv
+  processed_path: data/processed/molecules.csv
+  strip_salts: true
+  neutralise: true
+  min_heavy_atoms: 8
+  max_heavy_atoms: 60
+  chembl:
+    # Raise to 50000 for the full-scale run; nothing else needs to change.
+    n_molecules: 5000
+    page_size: 1000
+    min_mw: 200.0
+    max_mw: 500.0
+    max_alogp: 5.0
+    max_ro5_violations: 0
+
+target:
+  # Trypsin with benzamidine bound (PDB 3PTB). Chosen for its small size,
+  # well-defined pocket and status as a classic docking validation system,
+  # NOT for therapeutic interest. The box is centred on the co-crystallised
+  # benzamidine. Swap target and box here to dock anything else.
+  name: trypsin_3ptb
+  receptor_pdb: data/targets/trypsin_3ptb/receptor_raw.pdb
+  receptor_pdbqt: data/targets/trypsin_3ptb/receptor.pdbqt
+  center: [-1.76, 14.46, 16.92]
+  size: [20.0, 20.0, 20.0]
+
+oracle:
+  backend: smina
+  smina_binary: smina
+  exhaustiveness: 8
+  num_modes: 9
+  seed: 0
+  # CPU cores, not GPU. null means cpu_count() - 1.
+  n_workers: null
+  timeout_s: 600
+  cache_path: cache/docking_cache.jsonl
+  embed_max_attempts: 10
+  ff_max_iters: 500
+
+model:
+  hidden_dim: 128
+  num_layers: 4
+  dropout: 0.15
+  pool: mean_max
+  residual: true
+
+train:
+  epochs: 150
+  # Tuned for ~6 GB VRAM; see configs/gpu_16gb.yaml for the larger profile.
+  batch_size: 64
+  lr: 0.001
+  weight_decay: 0.00001
+  num_workers: 4
+  pin_memory: true
+  # Auto-disabled on CPU, with a log line.
+  amp: true
+  grad_clip: 5.0
+  early_stopping_patience: 25
+  lr_scheduler_patience: 10
+  checkpoint_every_epoch: true
+
+uncertainty:
+  method: mc_dropout
+  mc_passes: 30
+  # Stochastic passes replicated into one forward call; VRAM bound.
+  mc_chunk: 10
+  ensemble_size: 5
+  # Member-parallel multi-GPU path. Not implemented; see models/ensemble.py.
+  ddp: false
+  ddp_world_size: 1
+
+evaluation:
+  splits: [scaffold, random]
+  test_frac: 0.2
+  val_frac: 0.1
+  bootstrap_samples: 1000
+  bootstrap_ci: 0.95
+  ef_fractions: [0.01, 0.05]
+  precision_k: [10, 50, 100]
+  calibration_bins: 10
+
+al:
+  initial_size: 500
+  batch_size: 250
+  rounds: 10
+  seeds: [0, 1, 2, 3, 4]
+  # 'random' is mandatory: it is the claim the plot has to beat.
+  strategies: [uncertainty, greedy, random]
+  top_k: 100
+  epochs_per_round: 60

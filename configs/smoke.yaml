@@ -1,0 +1,105 @@
+# Smoke-test configuration: the whole pipeline on 200 molecules, CPU-only,
+# in under five minutes.
+#
+# This is what CI runs and what a first-time user should run before anything
+# else. Two deliberate properties:
+#
+#   1. CPU-only (run.device: cpu). It must work on a machine with no GPU, and
+#      it must FAIL rather than silently use one, so that "the smoke test
+#      passed" means the CPU path works.
+#   2. Offline (data.source: csv). It reads the committed 200-molecule file
+#      frozen from ChEMBL rather than querying the API, so CI does not depend
+#      on the ChEMBL service or on which database release is live.
+#
+# The numbers this produces are NOT results. 200 molecules, 3 AL rounds and
+# exhaustiveness 1 exist to exercise every code path cheaply, not to measure
+# anything. Metrics from this config should never be quoted.
+
+run:
+  name: smoke
+  seed: 0
+  output_dir: runs
+  device: cpu
+
+data:
+  source: csv
+  csv_path: data/smoke/chembl_smoke_raw.csv
+  smiles_column: smiles
+  id_column: chembl_id
+  raw_path: data/raw/smoke_raw.csv
+  processed_path: data/processed/smoke_molecules.csv
+  strip_salts: true
+  neutralise: true
+  min_heavy_atoms: 8
+  max_heavy_atoms: 50
+
+target:
+  name: trypsin_3ptb
+  receptor_pdb: data/targets/trypsin_3ptb/receptor_raw.pdb
+  receptor_pdbqt: data/targets/trypsin_3ptb/receptor.pdbqt
+  center: [-1.76, 14.46, 16.92]
+  # A tighter box than the default: less search volume per ligand, which is
+  # most of what keeps the docking stage inside the time budget.
+  size: [16.0, 16.0, 16.0]
+
+oracle:
+  backend: smina
+  smina_binary: smina
+  # Minimum search effort. Scores from exhaustiveness 1 are noisy and are not
+  # comparable with the default's exhaustiveness 8; the cache fingerprint
+  # keeps them in a separate partition so the two can never be mixed.
+  exhaustiveness: 1
+  num_modes: 3
+  seed: 0
+  n_workers: null
+  timeout_s: 120
+  cache_path: cache/smoke_docking_cache.jsonl
+  embed_max_attempts: 5
+  ff_max_iters: 200
+
+model:
+  hidden_dim: 32
+  num_layers: 2
+  dropout: 0.15
+  pool: mean_max
+  residual: true
+
+train:
+  epochs: 8
+  batch_size: 32
+  lr: 0.003
+  num_workers: 0
+  # No GPU to pin for.
+  pin_memory: false
+  # Honoured but auto-disabled on CPU; kept true so the smoke test exercises
+  # that branch rather than hiding it.
+  amp: true
+  early_stopping_patience: 8
+  lr_scheduler_patience: 4
+
+uncertainty:
+  method: mc_dropout
+  mc_passes: 8
+  mc_chunk: 4
+  ensemble_size: 2
+
+evaluation:
+  splits: [scaffold, random]
+  test_frac: 0.2
+  val_frac: 0.1
+  # Enough resamples to exercise the code path, far too few to trust an
+  # interval from.
+  bootstrap_samples: 50
+  bootstrap_ci: 0.95
+  ef_fractions: [0.05]
+  precision_k: [10]
+  calibration_bins: 5
+
+al:
+  initial_size: 60
+  batch_size: 30
+  rounds: 3
+  seeds: [0, 1]
+  strategies: [uncertainty, greedy, random]
+  top_k: 20
+  epochs_per_round: 5

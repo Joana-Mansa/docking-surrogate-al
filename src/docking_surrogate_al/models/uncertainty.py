@@ -60,13 +60,13 @@ class UncertainPrediction:
 
     mean: np.ndarray
     std: np.ndarray
-    pool_index: np.ndarray
+    pool_id: np.ndarray
     method: str
     n_samples: int
 
     def __post_init__(self) -> None:
-        if not (len(self.mean) == len(self.std) == len(self.pool_index)):
-            raise ValueError("mean, std and pool_index must be the same length")
+        if not (len(self.mean) == len(self.std) == len(self.pool_id)):
+            raise ValueError("mean, std and pool_id must be the same length")
 
     def reordered(self) -> UncertainPrediction:
         """Return predictions sorted by pool index.
@@ -75,11 +75,11 @@ class UncertainPrediction:
         pool position, so sorting here removes a whole class of silent
         misalignment bugs.
         """
-        order = np.argsort(self.pool_index)
+        order = np.argsort(self.pool_id)
         return UncertainPrediction(
             mean=self.mean[order],
             std=self.std[order],
-            pool_index=self.pool_index[order],
+            pool_id=self.pool_id[order],
             method=self.method,
             n_samples=self.n_samples,
         )
@@ -149,12 +149,12 @@ def mc_dropout_predict(
         means.append(samples.mean(dim=0).cpu().numpy())
         # Unbiased sample std: n_passes is small, so the correction matters.
         stds.append(samples.std(dim=0, unbiased=True).cpu().numpy())
-        indices.append(batch.pool_index.view(-1).cpu().numpy())
+        indices.append(batch.pool_id.view(-1).cpu().numpy())
 
     return UncertainPrediction(
         mean=scaler.inverse(np.concatenate(means)),
         std=scaler.inverse_std(np.concatenate(stds)),
-        pool_index=np.concatenate(indices),
+        pool_id=np.concatenate(indices),
         method="mc_dropout",
         n_samples=n_passes,
     ).reordered()
@@ -179,7 +179,7 @@ def ensemble_predict(
         raise ValueError(f"a deep ensemble needs at least 2 members, got {len(members)}")
 
     per_member: list[np.ndarray] = []
-    pool_index: np.ndarray | None = None
+    pool_id: np.ndarray | None = None
 
     for member in members:
         member.eval()
@@ -190,20 +190,20 @@ def ensemble_predict(
             with torch.autocast(device_type=device.type, enabled=use_amp):
                 out = member(batch.x, batch.edge_index, batch.edge_attr, batch.batch)
             predictions.append(out.float().cpu().numpy())
-            indices.append(batch.pool_index.view(-1).cpu().numpy())
+            indices.append(batch.pool_id.view(-1).cpu().numpy())
         member_predictions = np.concatenate(predictions)
         member_indices = np.concatenate(indices)
         order = np.argsort(member_indices)
         per_member.append(member_predictions[order])
-        if pool_index is None:
-            pool_index = member_indices[order]
+        if pool_id is None:
+            pool_id = member_indices[order]
 
     stacked = np.stack(per_member, axis=0)
-    assert pool_index is not None
+    assert pool_id is not None
     return UncertainPrediction(
         mean=scaler.inverse(stacked.mean(axis=0)),
         std=scaler.inverse_std(stacked.std(axis=0, ddof=1)),
-        pool_index=pool_index,
+        pool_id=pool_id,
         method="deep_ensemble",
         n_samples=len(members),
     )

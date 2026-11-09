@@ -143,7 +143,12 @@ def mol_to_graph(
         smiles: Canonical SMILES (already standardised).
         y: Target docking score, or None at prediction time.
         index: Position in the pool, carried through so predictions can be
-            mapped back to molecules after shuffling.
+            mapped back to molecules after shuffling. Stored as ``pool_id``,
+            deliberately NOT ``pool_index``: PyTorch Geometric increments any
+            attribute whose name contains "index" by the node offset when it
+            builds a batch, treating it as an edge index. That silently
+            corrupts a per-graph identifier, which is exactly the kind of
+            misalignment that produces plausible but wrong results.
 
     Returns:
         A :class:`torch_geometric.data.Data` object, or None if the molecule
@@ -180,7 +185,7 @@ def mol_to_graph(
     if y is not None:
         data.y = torch.tensor([float(y)], dtype=torch.float32)
     if index is not None:
-        data.pool_index = torch.tensor([int(index)], dtype=torch.long)
+        data.pool_id = torch.tensor([int(index)], dtype=torch.long)
     return data
 
 

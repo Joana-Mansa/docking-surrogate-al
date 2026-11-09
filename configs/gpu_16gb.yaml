@@ -1,0 +1,67 @@
+# Profile for a single ~16 GB GPU (e.g. RTX 4080, A4000, V100).
+#
+# This is the hardware the project was specified against. The defaults in
+# configs/default.yaml target a 6 GB laptop card instead, so that a clean
+# clone runs on modest hardware; this file raises the throughput knobs.
+#
+# Usage: this is a FULL config, not a patch. Copy the settings you want into
+# your run config, or pass the overrides directly:
+#   dsal train --config configs/default.yaml \
+#     --set train.batch_size=256 --set uncertainty.mc_chunk=30
+
+run:
+  name: gpu16
+  seed: 0
+  output_dir: runs
+  # Explicitly require the GPU: this profile is pointless on CPU and should
+  # fail rather than quietly fall back.
+  device: cuda
+
+data:
+  source: chembl
+  chembl:
+    n_molecules: 5000
+
+target:
+  name: trypsin_3ptb
+  center: [-1.76, 14.46, 16.92]
+  size: [20.0, 20.0, 20.0]
+
+oracle:
+  backend: smina
+  exhaustiveness: 8
+  cache_path: cache/docking_cache.jsonl
+
+model:
+  hidden_dim: 256
+  num_layers: 5
+  dropout: 0.15
+
+train:
+  epochs: 150
+  # ~4x the 6 GB default; graphs are small, so throughput scales well here.
+  batch_size: 256
+  lr: 0.001
+  num_workers: 8
+  pin_memory: true
+  amp: true
+
+uncertainty:
+  method: mc_dropout
+  mc_passes: 30
+  # All 30 passes in one forward call: 256 x 30 graphs fits comfortably.
+  mc_chunk: 30
+  ensemble_size: 5
+
+evaluation:
+  splits: [scaffold, random]
+  bootstrap_samples: 1000
+
+al:
+  initial_size: 500
+  batch_size: 250
+  rounds: 10
+  seeds: [0, 1, 2, 3, 4]
+  strategies: [uncertainty, greedy, random]
+  top_k: 100
+  epochs_per_round: 60

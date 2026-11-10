@@ -29,6 +29,7 @@ from docking_surrogate_al.oracle.base import DockingOracle, OracleResult
 from docking_surrogate_al.oracle.runner import chunk
 from docking_surrogate_al.oracle.smina_backend import (
     SminaOracle,
+    parse_batch_output_all_modes,
     parse_batch_output_sdf,
 )
 
@@ -91,6 +92,26 @@ def test_parse_batch_output_skips_entries_without_an_affinity(tmp_path):
     parsed = parse_batch_output_sdf(path)
     assert parsed == {"LIG_A": -7.1}
     assert "LIG_B" not in parsed
+
+
+def test_parse_batch_output_all_modes_keeps_every_pose(tmp_path):
+    path = tmp_path / "out.sdf"
+    _write_sdf(path, [("LIG_A", -7.1), ("LIG_A", -8.5), ("LIG_B", -6.0)])
+    assert parse_batch_output_all_modes(path) == {"LIG_A": [-7.1, -8.5], "LIG_B": [-6.0]}
+
+
+def test_parse_batch_output_preserves_full_precision(tmp_path):
+    """The SDF property, not smina's stdout table, is the score source.
+
+    smina prints its affinity table rounded to one decimal place. The
+    docking score is this project's regression target, so reading the
+    rounded value would quantise the labels to 0.1 kcal/mol. CI caught this
+    as a spurious batched-vs-unbatched mismatch (-5.25843 vs -5.3) before it
+    was fixed.
+    """
+    path = tmp_path / "out.sdf"
+    _write_sdf(path, [("LIG_A", -5.25843)])
+    assert parse_batch_output_sdf(path)["LIG_A"] == pytest.approx(-5.25843, abs=1e-6)
 
 
 def test_parse_batch_output_on_missing_or_empty_file(tmp_path):
@@ -163,20 +184,40 @@ def test_dock_many_returns_one_result_per_input_with_bad_ligands(monkeypatch):
     assert all(r.score is None for r in results)
 
 
-def test_dock_many_on_empty_and_single_inputs(monkeypatch):
+def test_dock_many_on_empty_input(monkeypatch):
     oracle = SminaOracle(OracleConfig(), TargetConfig())
     monkeypatch.setattr(SminaOracle, "version", lambda self: "smina 1.0")
     assert oracle.dock_many([]) == []
 
-    monkeypatch.setattr(
-        SminaOracle,
-        "dock",
-        lambda self, s: OracleResult(
-            smiles=s, score=-5.0, backend="smina", backend_version="1.0", status="ok"
-        ),
-    )
-    single = oracle.dock_many(["CCO"])
-    assert len(single) == 1 and single[0].score == -5.0
+
+def test_dock_and_dock_many_share_one_implementation(monkeypatch):
+    """Both entry points must go through _dock_impl.
+
+    They used to parse scores from different sources, and disagreed as a
+    result: the stdout table is rounded to one decimal while the SDF carries
+    full precision. Sharing the implementation is what prevents that class
+    of drift from coming back.
+    """
+    oracle = SminaOracle(OracleConfig(), TargetConfig())
+    seen: list[list[str]] = []
+
+    def fake_impl(self, batch):
+        seen.append(list(batch))
+        return [
+            OracleResult(
+                smiles=s, score=-5.25843, backend="smina", backend_version="1.0", status="ok"
+            )
+            for s in batch
+        ]
+
+    monkeypatch.setattr(SminaOracle, "_dock_impl", fake_impl)
+
+    single = oracle.dock("CCO")
+    assert single.score == pytest.approx(-5.25843, abs=1e-6)
+
+    many = oracle.dock_many(["CCO", "CCN"])
+    assert [r.smiles for r in many] == ["CCO", "CCN"]
+    assert seen == [["CCO"], ["CCO", "CCN"]]
 
 
 # --- the assumption batching rests on ------------------------------------
@@ -210,7 +251,9 @@ def test_batching_does_not_change_scores():
     for b, s in zip(batched, one_at_a_time, strict=True):
         assert b.status == s.status, f"{b.smiles}: {b.status} vs {s.status}"
         if b.ok and s.ok:
-            assert b.score == pytest.approx(s.score, abs=0.01), (
+            # Both paths read minimizedAffinity from the output SDF, so they
+            # should agree to full precision, not merely to a rounded table.
+            assert b.score == pytest.approx(s.score, abs=1e-6), (
                 f"{b.smiles}: batched {b.score} vs unbatched {s.score}. "
                 "If this fails, ligand_batch_size must be part of the cache "
                 "settings fingerprint."

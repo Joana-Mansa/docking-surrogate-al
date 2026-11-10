@@ -143,128 +143,31 @@ class SminaOracle(DockingOracle):
 
     # -- docking ----------------------------------------------------------
     def dock(self, smiles: str) -> OracleResult:
-        """Dock one molecule, returning a failure result rather than raising."""
-        start = perf_counter()
-        try:
-            version = self.version()
-        except OracleUnavailableError:
-            raise
+        """Dock one molecule, returning a failure result rather than raising.
 
-        with tempfile.TemporaryDirectory(prefix="dsal_dock_") as tmp:
-            tmp_dir = Path(tmp)
-            ligand = tmp_dir / "ligand.sdf"
-            try:
-                generate_conformer_sdf(
-                    smiles,
-                    ligand,
-                    seed=self.cfg.seed,
-                    max_attempts=self.cfg.embed_max_attempts,
-                    ff_max_iters=self.cfg.ff_max_iters,
-                )
-            except LigandPrepError as exc:
-                return OracleResult(
-                    smiles=smiles,
-                    score=None,
-                    backend=self.name,
-                    backend_version=version,
-                    status="prep_failed",
-                    error=str(exc),
-                    wall_clock_s=round(perf_counter() - start, 3),
-                )
-
-            command = [
-                self._binary(),
-                "--receptor", str(self._receptor()),
-                "--ligand", str(ligand),
-                "--center_x", str(self.target.center[0]),
-                "--center_y", str(self.target.center[1]),
-                "--center_z", str(self.target.center[2]),
-                "--size_x", str(self.target.size[0]),
-                "--size_y", str(self.target.size[1]),
-                "--size_z", str(self.target.size[2]),
-                "--exhaustiveness", str(self.cfg.exhaustiveness),
-                "--num_modes", str(self.cfg.num_modes),
-                "--seed", str(self.cfg.seed),
-                # One thread per process; the runner provides the parallelism.
-                "--cpu", "1",
-                "--out", str(tmp_dir / "out.sdf"),
-            ]
-
-            try:
-                result = subprocess.run(
-                    command,
-                    capture_output=True,
-                    text=True,
-                    timeout=self.cfg.timeout_s,
-                    check=False,
-                )
-            except subprocess.TimeoutExpired:
-                return OracleResult(
-                    smiles=smiles,
-                    score=None,
-                    backend=self.name,
-                    backend_version=version,
-                    status="timeout",
-                    error=f"smina exceeded {self.cfg.timeout_s}s",
-                    wall_clock_s=round(perf_counter() - start, 3),
-                )
-            except OSError as exc:
-                return OracleResult(
-                    smiles=smiles,
-                    score=None,
-                    backend=self.name,
-                    backend_version=version,
-                    status="dock_failed",
-                    error=str(exc),
-                    wall_clock_s=round(perf_counter() - start, 3),
-                )
-
-            if result.returncode != 0:
-                return OracleResult(
-                    smiles=smiles,
-                    score=None,
-                    backend=self.name,
-                    backend_version=version,
-                    status="dock_failed",
-                    error=f"smina exit {result.returncode}: {result.stderr.strip()[:400]}",
-                    wall_clock_s=round(perf_counter() - start, 3),
-                )
-
-            modes = parse_affinity_table(result.stdout)
-            if not modes:
-                return OracleResult(
-                    smiles=smiles,
-                    score=None,
-                    backend=self.name,
-                    backend_version=version,
-                    status="parse_failed",
-                    error=f"no affinity table in smina output: {result.stdout.strip()[:400]}",
-                    wall_clock_s=round(perf_counter() - start, 3),
-                )
-
-            return OracleResult(
-                smiles=smiles,
-                score=min(modes),
-                backend=self.name,
-                backend_version=version,
-                status="ok",
-                wall_clock_s=round(perf_counter() - start, 3),
-                extra={"all_mode_affinities": modes},
-            )
+        Delegates to the same batch implementation as :meth:`dock_many` with
+        a batch of one. This is not just code reuse: when the two paths
+        parsed scores from different places they disagreed, because smina's
+        stdout affinity table is rounded to one decimal while the output SDF
+        carries full precision. The docking score is this project's
+        regression target, so quantising it to 0.1 kcal/mol would coarsen
+        the very thing the surrogate learns.
+        """
+        return self._dock_impl([smiles])[0]
 
     def dock_many(self, smiles_list: Sequence[str]) -> list[OracleResult]:
         """Dock a batch of molecules with a single smina invocation.
 
-        Falls back to one-at-a-time docking when the batch is trivially
-        small, and never lets one bad ligand cost the whole batch: ligands
-        that cannot be embedded are reported individually and simply omitted
-        from the SDF handed to smina.
+        Never lets one bad ligand cost the whole batch: ligands that cannot
+        be embedded are reported individually and omitted from the SDF handed
+        to smina.
         """
-        smiles_list = list(smiles_list)
+        return self._dock_impl(list(smiles_list))
+
+    def _dock_impl(self, smiles_list: list[str]) -> list[OracleResult]:
+        """Dock one batch; shared by dock() and dock_many()."""
         if not smiles_list:
             return []
-        if len(smiles_list) == 1:
-            return [self.dock(smiles_list[0])]
 
         start = perf_counter()
         version = self.version()
@@ -371,17 +274,21 @@ class SminaOracle(DockingOracle):
                     )
                 return [results[s] for s in smiles_list]
 
-            scores = parse_batch_output_sdf(out_sdf)
+            modes = parse_batch_output_all_modes(out_sdf)
             for tag, smiles in tag_to_smiles.items():
-                if tag in scores:
+                if modes.get(tag):
+                    affinities = modes[tag]
                     results[smiles] = OracleResult(
                         smiles=smiles,
-                        score=scores[tag],
+                        score=min(affinities),
                         backend=self.name,
                         backend_version=version,
                         status="ok",
                         wall_clock_s=elapsed,
-                        extra={"batched": True, "batch_size": len(tag_to_smiles)},
+                        extra={
+                            "all_mode_affinities": affinities,
+                            "batch_size": len(tag_to_smiles),
+                        },
                     )
                 else:
                     # smina omits ligands it could not dock. Matching by name
@@ -436,13 +343,16 @@ _LIGAND_TAG = "DSAL_LIGAND_{index:06d}"
 _AFFINITY_PROP = "minimizedAffinity"
 
 
-def parse_batch_output_sdf(path: Path) -> dict[str, float]:
-    """Map ligand name to best (most negative) affinity from a smina SDF.
+def parse_batch_output_all_modes(path: Path) -> dict[str, list[float]]:
+    """Map ligand name to every pose affinity smina wrote for it.
 
-    Kept separate from the subprocess plumbing so it can be unit-tested
-    against a hand-built SDF with no smina binary present.
+    Reads ``minimizedAffinity`` from the output SDF rather than the stdout
+    affinity table, because the table is rounded to one decimal place while
+    the SDF property carries full precision. Kept separate from the
+    subprocess plumbing so it can be unit-tested against a hand-built SDF
+    with no smina binary present.
     """
-    scores: dict[str, float] = {}
+    scores: dict[str, list[float]] = {}
     if not path.exists() or path.stat().st_size == 0:
         return scores
 
@@ -459,7 +369,10 @@ def parse_batch_output_sdf(path: Path) -> dict[str, float]:
             affinity = float(mol.GetProp(_AFFINITY_PROP))
         except (ValueError, TypeError):
             continue
-        # Several poses per ligand when num_modes > 1; keep the best.
-        if name not in scores or affinity < scores[name]:
-            scores[name] = affinity
+        scores.setdefault(name, []).append(affinity)
     return scores
+
+
+def parse_batch_output_sdf(path: Path) -> dict[str, float]:
+    """Map ligand name to its best (most negative) affinity."""
+    return {name: min(vals) for name, vals in parse_batch_output_all_modes(path).items() if vals}

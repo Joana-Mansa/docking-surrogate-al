@@ -80,6 +80,13 @@ class DataConfig:
     raw_path: str = "data/raw/molecules_raw.csv"
     processed_path: str = "data/processed/molecules.csv"
     chembl: ChemblConfig = field(default_factory=ChemblConfig)
+    # Docking scores above this are treated as non-physical and excluded from
+    # the modelling pool. smina returns large positive affinities when a
+    # ligand cannot fit the box without steric clash; those are a statement
+    # that docking failed, not a binding estimate, and as regression targets
+    # a handful of them dominate the target scaler. Set to null to keep every
+    # score, which is only sensible if you intend to model clash energies.
+    max_docking_score: float | None = 0.0
     # Standardisation switches, all applied in data.standardise.
     strip_salts: bool = True
     neutralise: bool = True

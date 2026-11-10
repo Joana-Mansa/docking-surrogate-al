@@ -281,6 +281,29 @@ the docking cache under simulated interruption, config validation, and
 checkpoint/resume — the last comparing a 3-epoch-plus-resume run against an
 uninterrupted 6-epoch run, not merely checking that a file loads.
 
+## A note on non-physical docking scores
+
+smina returns large **positive** affinities when a ligand cannot fit the box
+without steric clash. Those are a report that docking failed, not a weak
+binding estimate, and as regression targets a handful of them dominate
+everything: on a 200-molecule run with a too-small box, 26 clash scores (worst
++110.76 kcal/mol) inflated the target standard deviation from 1.23 to 10.56
+and drove test RMSE to ~10 on a target spanning about 7 kcal/mol.
+
+Two defences:
+
+- `data.max_docking_score` (default 0.0) excludes them from the modelling
+  pool. The filter is applied at pool construction, not in the oracle, so the
+  cache keeps exactly what the oracle returned and the exclusion stays a
+  visible, configurable modelling decision. Every run reports how many were
+  dropped, and warns loudly if it exceeds 5% of the pool.
+- The `dock` stage records the count, fraction and worst score in the run
+  manifest under `docking_quality`.
+
+If more than a few percent of a pool comes back positive, the usual cause is
+that `target.size` is too small for the ligands being docked. Both shipped
+configs use a 20 Å box.
+
 ## Limitations
 
 - **Single target.** One protein, one box, one exhaustiveness setting.
@@ -297,6 +320,11 @@ uninterrupted 6-epoch run, not merely checking that a file loads.
   same way, docked against the same receptor with the same box. True
   prospective use means new chemistry from a different source, which is harder
   than anything measured here.
+- **Clash scores are excluded, not modelled.** Molecules that cannot fit
+  the box are dropped from the pool rather than treated as very weak binders.
+  That is the right call for a binding-score surrogate, but it means the
+  reported metrics describe performance on molecules that dock at all, and a
+  real campaign would still pay oracle calls for the ones that do not.
 - **Small chemical space.** 5,000 molecules by default (50,000 at the
   configured ceiling) is a narrow slice of drug-like space. Enrichment at 1%
   on a few hundred test molecules is coarse: the top 1% may be two molecules,

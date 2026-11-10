@@ -45,11 +45,19 @@ target:
   receptor_pdb: data/targets/trypsin_3ptb/receptor_raw.pdb
   receptor_pdbqt: data/targets/trypsin_3ptb/receptor.pdbqt
   center: [-1.76, 14.46, 16.92]
-  # Measured: shrinking this box from 16A to 12A changed the docking stage's
-  # runtime by nothing, which is what established that smina's cost here is
-  # per-invocation receptor setup rather than search volume. Kept at 14A as a
-  # middle ground; the real lever is oracle.ligand_batch_size below.
-  size: [14.0, 14.0, 14.0]
+  # Same 20A box as configs/default.yaml, deliberately.
+  #
+  # This was shrunk to 16A, then 12A, then 14A chasing a speedup that
+  # measurement showed never existed (the cost is per-invocation receptor
+  # setup, not search volume). The shrink was not free: at 14A, 26 of 200
+  # drug-like ligands could not fit without steric clash and smina returned
+  # large POSITIVE affinities, up to +110 kcal/mol. Those are not binding
+  # scores, and as regression targets they inflated the target scaler's
+  # standard deviation 8.6x (10.56 vs 1.23), wrecking training.
+  #
+  # The smoke config must exercise the same code paths as the real one, and
+  # a box that silently mangles the target distribution does not.
+  size: [20.0, 20.0, 20.0]
 
 oracle:
   backend: smina

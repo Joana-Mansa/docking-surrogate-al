@@ -114,6 +114,56 @@ def _docked_frame(cfg: Config) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
+def _build_pool(cfg: Config, frame: pd.DataFrame) -> tuple[MoleculePool, dict[str, Any]]:
+    """Build the modelling pool, excluding non-physical docking scores.
+
+    smina returns large positive affinities for ligands that cannot fit the
+    box without steric clash. Those are a report that docking failed, not a
+    binding estimate. Left in, a handful of them dominate the target scaler:
+    observed on a 200-molecule run, 26 clash scores inflated the target
+    standard deviation from 1.23 to 10.56 and made RMSE meaningless.
+
+    They are excluded here rather than in the oracle, so the cache keeps
+    exactly what the oracle returned and the filtering stays a visible,
+    configurable modelling decision.
+    """
+    ceiling = cfg.data.max_docking_score
+    total = len(frame)
+    excluded = 0
+    if ceiling is not None and "score" in frame.columns:
+        mask = frame["score"] <= ceiling
+        excluded = int((~mask).sum())
+        if excluded:
+            worst = float(frame.loc[~mask, "score"].max())
+            fraction = excluded / max(total, 1)
+            logger.warning(
+                "Excluding %d of %d molecule(s) (%.1f%%) with a docking score above "
+                "%.2f kcal/mol; worst was %.2f. These are steric-clash reports, not "
+                "binding estimates.",
+                excluded,
+                total,
+                100 * fraction,
+                ceiling,
+                worst,
+            )
+            if fraction > 0.05:
+                logger.warning(
+                    "That is more than 5%% of the pool, which usually means the "
+                    "docking box is too small for these ligands. Check target.size "
+                    "(currently %s) before trusting any result from this run.",
+                    list(cfg.target.size),
+                )
+        frame = frame[mask]
+
+    summary = {
+        "docked_molecules": total,
+        "excluded_non_physical": excluded,
+        "max_docking_score": ceiling,
+        "pool_size": len(frame),
+    }
+    return MoleculePool.from_frame(frame), summary
+
+
 # --------------------------------------------------------------------------
 # Stages
 # --------------------------------------------------------------------------
@@ -209,6 +259,29 @@ def cmd_dock(args: argparse.Namespace) -> int:
             resolve_path("figures") / f"{cfg.run.name}_score_distribution.png",
         )
 
+    if len(docked):
+        n_positive = int((docked["score"] > 0).sum())
+        manifest.record(
+            "docking_quality",
+            {
+                "n_scored": len(docked),
+                "n_non_physical_positive": n_positive,
+                "fraction_non_physical": round(n_positive / len(docked), 4),
+                "worst_score": float(docked["score"].max()),
+                "best_score": float(docked["score"].min()),
+            },
+        )
+        if n_positive:
+            logger.warning(
+                "%d of %d docked molecule(s) returned a POSITIVE score (worst %.2f). "
+                "Positive affinities mean the ligand could not fit without steric "
+                "clash. They are kept in the cache but excluded from modelling by "
+                "data.max_docking_score.",
+                n_positive,
+                len(docked),
+                float(docked["score"].max()),
+            )
+
     manifest.record_stage(timer.summary())
     failed = len(smiles) - len(docked)
     logger.info(
@@ -227,7 +300,8 @@ def cmd_train(args: argparse.Namespace) -> int:
     """Train one model per configured split."""
     cfg, device, manifest = _bootstrap(args, "train")
     frame = _docked_frame(cfg)
-    pool = MoleculePool.from_frame(frame)
+    pool, pool_summary = _build_pool(cfg, frame)
+    manifest.record("pool", pool_summary)
 
     split_summaries: dict[str, Any] = {}
     for kind in cfg.evaluation.splits:
@@ -321,7 +395,8 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     """Evaluate trained models on both splits, side by side."""
     cfg, device, manifest = _bootstrap(args, "evaluate")
     frame = _docked_frame(cfg)
-    pool = MoleculePool.from_frame(frame)
+    pool, pool_summary = _build_pool(cfg, frame)
+    manifest.record("pool", pool_summary)
     suite = MetricSuite(cfg.evaluation.ef_fractions, cfg.evaluation.precision_k)
 
     evaluations = []
@@ -426,7 +501,8 @@ def cmd_run_al(args: argparse.Namespace) -> int:
     """Run the active-learning experiment across strategies and seeds."""
     cfg, device, manifest = _bootstrap(args, "run-al")
     frame = _docked_frame(cfg)
-    pool = MoleculePool.from_frame(frame)
+    pool, pool_summary = _build_pool(cfg, frame)
+    manifest.record("pool", pool_summary)
 
     with StageTimer("run_al", device) as timer:
         results = run_experiment(

@@ -258,3 +258,66 @@ def test_batching_does_not_change_scores():
                 "If this fails, ligand_batch_size must be part of the cache "
                 "settings fingerprint."
             )
+
+
+# --- non-physical docking scores -----------------------------------------
+
+
+def test_non_physical_scores_are_excluded_from_the_pool(tmp_path):
+    """Positive affinities must not reach the modelling pool.
+
+    smina returns large positive scores when a ligand cannot fit the box
+    without steric clash. Observed on a real 200-molecule run: 26 such
+    scores, worst +110.76, which inflated the target scaler's standard
+    deviation from 1.23 to 10.56 and drove test RMSE to ~10 on a target
+    spanning about 7 kcal/mol. They are a report that docking failed, not a
+    binding estimate.
+    """
+    import pandas as pd
+
+    from docking_surrogate_al.cli import _build_pool
+    from docking_surrogate_al.config import Config, DataConfig, RunConfig
+
+    frame = pd.DataFrame(
+        {
+            "canonical_smiles": [
+                "CCOc1ccccc1C(=O)O",
+                "NC(=O)c1ccccc1",
+                "Cc1c[nH]c2ccccc12",
+                "c1ccc2ncccc2c1",
+            ],
+            "score": [-7.1, -6.4, 110.76, 12.3],
+        }
+    )
+    cfg = Config(run=RunConfig(output_dir=str(tmp_path)), data=DataConfig())
+
+    pool, summary = _build_pool(cfg, frame)
+
+    assert summary["excluded_non_physical"] == 2
+    assert summary["pool_size"] == 2
+    assert len(pool) == 2
+    assert pool.scores.max() <= 0.0
+    # The scaler must be computed on the physical subset.
+    assert pool.scores.std() < 1.0
+
+
+def test_keeping_non_physical_scores_is_possible_but_opt_in(tmp_path):
+    """Setting the ceiling to null keeps every score."""
+    import pandas as pd
+
+    from docking_surrogate_al.cli import _build_pool
+    from docking_surrogate_al.config import Config, DataConfig, RunConfig
+
+    frame = pd.DataFrame(
+        {
+            "canonical_smiles": ["CCOc1ccccc1C(=O)O", "NC(=O)c1ccccc1"],
+            "score": [-7.1, 110.76],
+        }
+    )
+    cfg = Config(
+        run=RunConfig(output_dir=str(tmp_path)),
+        data=DataConfig(max_docking_score=None),
+    )
+    pool, summary = _build_pool(cfg, frame)
+    assert summary["excluded_non_physical"] == 0
+    assert len(pool) == 2

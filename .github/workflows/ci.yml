@@ -18,7 +18,12 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded PR runs, but never a push to a long-lived branch. The
+  # smoke job docks 200 molecules and takes ~8 minutes; cancelling it on
+  # every push means that during active development it never finishes, and
+  # a check that never finishes is not a check. Observed: two consecutive
+  # smoke runs cancelled before the raised time budget was ever exercised.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   PYTHONPATH: src

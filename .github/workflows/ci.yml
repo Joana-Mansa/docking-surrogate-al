@@ -99,12 +99,14 @@ jobs:
       # to twenty minutes stops being run.
       - name: Run the full pipeline
         run: |
+          # Per-stage timing, so a budget overrun names the stage that caused
+          # it instead of only the total. Docking dominates by design.
           start=$(date +%s)
-          python -m docking_surrogate_al.cli prepare-data --config configs/smoke.yaml
-          python -m docking_surrogate_al.cli dock         --config configs/smoke.yaml
-          python -m docking_surrogate_al.cli train        --config configs/smoke.yaml
-          python -m docking_surrogate_al.cli evaluate     --config configs/smoke.yaml
-          python -m docking_surrogate_al.cli run-al       --config configs/smoke.yaml
+          for stage in prepare-data dock train evaluate run-al; do
+            s0=$(date +%s)
+            python -m docking_surrogate_al.cli "$stage" --config configs/smoke.yaml
+            echo "::notice::stage ${stage} took $(( $(date +%s) - s0 ))s"
+          done
           elapsed=$(( $(date +%s) - start ))
           echo "Pipeline wall clock: ${elapsed}s"
           if [ "$elapsed" -gt 300 ]; then

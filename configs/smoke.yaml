@@ -38,9 +38,12 @@ target:
   receptor_pdb: data/targets/trypsin_3ptb/receptor_raw.pdb
   receptor_pdbqt: data/targets/trypsin_3ptb/receptor.pdbqt
   center: [-1.76, 14.46, 16.92]
-  # A tighter box than the default: less search volume per ligand, which is
-  # most of what keeps the docking stage inside the time budget.
-  size: [16.0, 16.0, 16.0]
+  # A much tighter box than the default: search cost scales with the volume,
+  # and this is the main lever on the docking stage's runtime. 12A still
+  # comfortably encloses the benzamidine site this box is centred on, but it
+  # is far too small for a general screen, which is one more reason smoke
+  # scores are not comparable with default-config scores.
+  size: [12.0, 12.0, 12.0]
 
 oracle:
   backend: smina
@@ -49,13 +52,16 @@ oracle:
   # comparable with the default's exhaustiveness 8; the cache fingerprint
   # keeps them in a separate partition so the two can never be mixed.
   exhaustiveness: 1
-  num_modes: 3
+  # Only the best mode is used as the regression target, and the smoke test
+  # does not analyse pose spread, so generating three is wasted work here.
+  num_modes: 1
   seed: 0
   n_workers: null
   timeout_s: 120
   cache_path: cache/smoke_docking_cache.jsonl
   embed_max_attempts: 5
-  ff_max_iters: 200
+  # Conformer generation is part of the per-molecule cost, not just docking.
+  ff_max_iters: 100
 
 model:
   hidden_dim: 32

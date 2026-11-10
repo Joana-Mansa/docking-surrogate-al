@@ -53,6 +53,11 @@ oracle:
   seed: 0
   # CPU cores, not GPU. null means cpu_count() - 1.
   n_workers: null
+  # Ligands per smina invocation. smina re-reads and re-types the receptor on
+  # every call; measured at ~11s/molecule when docking one at a time, which is
+  # setup cost, not search. Batching amortises it. Set to 1 to restore the
+  # old one-process-per-ligand behaviour.
+  ligand_batch_size: 25
   timeout_s: 600
   cache_path: cache/docking_cache.jsonl
   embed_max_attempts: 10

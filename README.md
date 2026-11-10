@@ -117,6 +117,23 @@ to any GPU setting; it defaults to `cpu_count() - 1`, leaving one core for the
 parent process. Each smina invocation is pinned to `--cpu 1` so that N worker
 processes do not each spawn N threads.
 
+**Docking throughput and why ligands are batched.** Docking one ligand per
+smina process measured at roughly 11 seconds per molecule on a CI runner, and
+shrinking the search box by 2.4x changed that by nothing. The cost is
+therefore not search: it is the fixed per-invocation work of reading and
+atom-typing the receptor and building grid maps, paid once per molecule.
+`oracle.ligand_batch_size` (default 25) docks many ligands per invocation
+from a multi-model SDF so that setup is amortised across a batch. Set it to 1
+to restore one process per ligand.
+
+Results are matched back to molecules by the ligand *name* written into the
+SDF, never by output order, because smina omits ligands it fails to dock and
+position-based matching would silently shift scores onto the wrong molecules.
+`ligand_batch_size` is deliberately *not* part of the docking cache
+fingerprint, which assumes batching does not change scores; CI checks that
+assumption directly by docking the same molecules batched and unbatched and
+comparing (`tests/test_batched_docking.py`).
+
 ### No GPU at all
 
 The smoke config is CPU-only and is what CI runs, so the repository is usable

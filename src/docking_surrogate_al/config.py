@@ -118,6 +118,11 @@ class OracleConfig:
     seed: int = 0
     # None means "all available cores minus one".
     n_workers: int | None = None
+    # Ligands docked per smina invocation. smina re-reads and re-types the
+    # receptor on every call, which measured at roughly 11s per molecule when
+    # docking one at a time; batching amortises that setup across a batch.
+    # 1 restores the old one-process-per-ligand behaviour.
+    ligand_batch_size: int = 25
     timeout_s: int = 600
     cache_path: str = "cache/docking_cache.jsonl"
     # 3D conformer generation for ligands, done once per molecule with RDKit.

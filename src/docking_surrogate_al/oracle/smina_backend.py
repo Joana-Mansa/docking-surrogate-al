@@ -30,6 +30,9 @@ import subprocess
 import tempfile
 from pathlib import Path
 from time import perf_counter
+from typing import Sequence
+
+from rdkit import Chem
 
 from ..config import OracleConfig, TargetConfig, resolve_path
 from .base import DockingOracle, OracleResult, OracleUnavailableError
@@ -249,6 +252,154 @@ class SminaOracle(DockingOracle):
                 extra={"all_mode_affinities": modes},
             )
 
+    def dock_many(self, smiles_list: Sequence[str]) -> list[OracleResult]:
+        """Dock a batch of molecules with a single smina invocation.
+
+        Falls back to one-at-a-time docking when the batch is trivially
+        small, and never lets one bad ligand cost the whole batch: ligands
+        that cannot be embedded are reported individually and simply omitted
+        from the SDF handed to smina.
+        """
+        smiles_list = list(smiles_list)
+        if not smiles_list:
+            return []
+        if len(smiles_list) == 1:
+            return [self.dock(smiles_list[0])]
+
+        start = perf_counter()
+        version = self.version()
+        results: dict[str, OracleResult] = {}
+        tag_to_smiles: dict[str, str] = {}
+
+        with tempfile.TemporaryDirectory(prefix="dsal_batch_") as tmp:
+            tmp_dir = Path(tmp)
+            batch_sdf = tmp_dir / "ligands.sdf"
+            out_sdf = tmp_dir / "out.sdf"
+
+            writer = Chem.SDWriter(str(batch_sdf))
+            try:
+                for index, smiles in enumerate(smiles_list):
+                    tag = _LIGAND_TAG.format(index=index)
+                    single = tmp_dir / f"lig_{index}.sdf"
+                    try:
+                        generate_conformer_sdf(
+                            smiles,
+                            single,
+                            seed=self.cfg.seed,
+                            max_attempts=self.cfg.embed_max_attempts,
+                            ff_max_iters=self.cfg.ff_max_iters,
+                        )
+                    except LigandPrepError as exc:
+                        results[smiles] = OracleResult(
+                            smiles=smiles,
+                            score=None,
+                            backend=self.name,
+                            backend_version=version,
+                            status="prep_failed",
+                            error=str(exc),
+                        )
+                        continue
+
+                    mol = next(iter(Chem.SDMolSupplier(str(single), removeHs=False)), None)
+                    if mol is None:
+                        results[smiles] = OracleResult(
+                            smiles=smiles,
+                            score=None,
+                            backend=self.name,
+                            backend_version=version,
+                            status="prep_failed",
+                            error="conformer SDF could not be re-read",
+                        )
+                        continue
+                    mol.SetProp("_Name", tag)
+                    tag_to_smiles[tag] = smiles
+                    writer.write(mol)
+            finally:
+                writer.close()
+
+            if not tag_to_smiles:
+                return [results[s] for s in smiles_list]
+
+            command = [
+                self._binary(),
+                "--receptor", str(self._receptor()),
+                "--ligand", str(batch_sdf),
+                "--center_x", str(self.target.center[0]),
+                "--center_y", str(self.target.center[1]),
+                "--center_z", str(self.target.center[2]),
+                "--size_x", str(self.target.size[0]),
+                "--size_y", str(self.target.size[1]),
+                "--size_z", str(self.target.size[2]),
+                "--exhaustiveness", str(self.cfg.exhaustiveness),
+                "--num_modes", str(self.cfg.num_modes),
+                "--seed", str(self.cfg.seed),
+                "--cpu", "1",
+                "--out", str(out_sdf),
+            ]
+
+            # The timeout scales with the batch, or a large batch would always
+            # trip a per-molecule timeout.
+            timeout_s = self.cfg.timeout_s * max(1, len(tag_to_smiles))
+            failure: tuple[str, str] | None = None
+            try:
+                completed = subprocess.run(
+                    command, capture_output=True, text=True, timeout=timeout_s, check=False
+                )
+                if completed.returncode != 0:
+                    failure = (
+                        "dock_failed",
+                        f"smina exit {completed.returncode}: {completed.stderr.strip()[:400]}",
+                    )
+            except subprocess.TimeoutExpired:
+                failure = ("timeout", f"smina batch exceeded {timeout_s}s")
+            except OSError as exc:
+                failure = ("dock_failed", str(exc))
+
+            elapsed = round((perf_counter() - start) / max(1, len(tag_to_smiles)), 3)
+
+            if failure is not None:
+                status, message = failure
+                for tag, smiles in tag_to_smiles.items():
+                    results[smiles] = OracleResult(
+                        smiles=smiles,
+                        score=None,
+                        backend=self.name,
+                        backend_version=version,
+                        status=status,  # type: ignore[arg-type]
+                        error=message,
+                        wall_clock_s=elapsed,
+                    )
+                return [results[s] for s in smiles_list]
+
+            scores = parse_batch_output_sdf(out_sdf)
+            for tag, smiles in tag_to_smiles.items():
+                if tag in scores:
+                    results[smiles] = OracleResult(
+                        smiles=smiles,
+                        score=scores[tag],
+                        backend=self.name,
+                        backend_version=version,
+                        status="ok",
+                        wall_clock_s=elapsed,
+                        extra={"batched": True, "batch_size": len(tag_to_smiles)},
+                    )
+                else:
+                    # smina omits ligands it could not dock. Matching by name
+                    # means this is detected rather than shifting scores onto
+                    # the wrong molecules.
+                    results[smiles] = OracleResult(
+                        smiles=smiles,
+                        score=None,
+                        backend=self.name,
+                        backend_version=version,
+                        status="dock_failed",
+                        error="ligand absent from smina batch output",
+                        wall_clock_s=elapsed,
+                    )
+
+        return [results[s] for s in smiles_list]
+
+
 
 def parse_affinity_table(stdout: str) -> list[float]:
     """Extract per-mode affinities (kcal/mol) from smina's stdout.
@@ -262,3 +413,53 @@ def parse_affinity_table(stdout: str) -> list[float]:
         if match:
             affinities.append(float(match.group(2)))
     return affinities
+
+# --------------------------------------------------------------------------
+# Batched docking
+# --------------------------------------------------------------------------
+#
+# Measured on CI: docking one ligand per smina process costs about 11s per
+# molecule, and shrinking the search box by 2.4x changed nothing. The cost is
+# therefore not search, it is the fixed per-invocation work of reading and
+# atom-typing the receptor and building grid maps, paid once per molecule.
+#
+# Batching writes many ligands into one multi-model SDF and runs smina once
+# over it, so that setup is paid once per batch instead.
+#
+# Results are matched back to molecules by the ligand NAME written into the
+# SDF, never by output order. smina omits ligands it fails to dock, so
+# position-based matching would silently shift every subsequent score onto
+# the wrong molecule, which is the worst possible failure here: it would look
+# like a working pipeline producing wrong numbers.
+
+_LIGAND_TAG = "DSAL_LIGAND_{index:06d}"
+_AFFINITY_PROP = "minimizedAffinity"
+
+
+def parse_batch_output_sdf(path: Path) -> dict[str, float]:
+    """Map ligand name to best (most negative) affinity from a smina SDF.
+
+    Kept separate from the subprocess plumbing so it can be unit-tested
+    against a hand-built SDF with no smina binary present.
+    """
+    scores: dict[str, float] = {}
+    if not path.exists() or path.stat().st_size == 0:
+        return scores
+
+    # sanitize=False: these are docked poses, and a pose that trips RDKit's
+    # sanitiser still carries a perfectly good affinity we should not discard.
+    supplier = Chem.SDMolSupplier(str(path), sanitize=False, removeHs=False)
+    for mol in supplier:
+        if mol is None:
+            continue
+        if not mol.HasProp("_Name") or not mol.HasProp(_AFFINITY_PROP):
+            continue
+        name = mol.GetProp("_Name")
+        try:
+            affinity = float(mol.GetProp(_AFFINITY_PROP))
+        except (ValueError, TypeError):
+            continue
+        # Several poses per ligand when num_modes > 1; keep the best.
+        if name not in scores or affinity < scores[name]:
+            scores[name] = affinity
+    return scores

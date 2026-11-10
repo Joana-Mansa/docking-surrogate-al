@@ -94,6 +94,13 @@ jobs:
           print("smoke config OK:", cfg.run.device, cfg.data.source)
           PY
 
+      # Batching ligands per smina call is only sound if it does not change
+      # scores; if it did, results cached under different batch sizes could
+      # not be mixed. smina is present here, so this is where that gets
+      # checked rather than assumed.
+      - name: Verify batched docking matches unbatched
+        run: pytest tests/test_batched_docking.py -q
+
       # The five-minute budget is on the pipeline, not on dependency install.
       # It is enforced rather than documented: a smoke test that quietly grows
       # to twenty minutes stops being run.

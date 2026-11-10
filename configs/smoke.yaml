@@ -38,12 +38,11 @@ target:
   receptor_pdb: data/targets/trypsin_3ptb/receptor_raw.pdb
   receptor_pdbqt: data/targets/trypsin_3ptb/receptor.pdbqt
   center: [-1.76, 14.46, 16.92]
-  # A much tighter box than the default: search cost scales with the volume,
-  # and this is the main lever on the docking stage's runtime. 12A still
-  # comfortably encloses the benzamidine site this box is centred on, but it
-  # is far too small for a general screen, which is one more reason smoke
-  # scores are not comparable with default-config scores.
-  size: [12.0, 12.0, 12.0]
+  # Measured: shrinking this box from 16A to 12A changed the docking stage's
+  # runtime by nothing, which is what established that smina's cost here is
+  # per-invocation receptor setup rather than search volume. Kept at 14A as a
+  # middle ground; the real lever is oracle.ligand_batch_size below.
+  size: [14.0, 14.0, 14.0]
 
 oracle:
   backend: smina
@@ -57,6 +56,9 @@ oracle:
   num_modes: 1
   seed: 0
   n_workers: null
+  # The whole 200-molecule smoke set in a handful of smina invocations
+  # instead of 200 of them.
+  ligand_batch_size: 25
   timeout_s: 120
   cache_path: cache/smoke_docking_cache.jsonl
   embed_max_attempts: 5

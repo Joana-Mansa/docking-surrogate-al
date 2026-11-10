@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass, field, asdict
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 OracleStatus = Literal["ok", "prep_failed", "dock_failed", "timeout", "parse_failed"]
 
@@ -106,6 +106,20 @@ class DockingOracle(abc.ABC):
         Must not raise for ordinary chemistry or tooling failures; return a
         result with the appropriate ``status`` instead.
         """
+
+    def dock_many(self, smiles_list: Sequence[str]) -> list[OracleResult]:
+        """Dock several molecules, returning one result per input.
+
+        The default implementation simply loops over :meth:`dock`, so a
+        backend only overrides this if it can amortise per-invocation work
+        across a batch. smina can: it re-reads and re-types the receptor on
+        every process launch, which dominates its per-molecule cost.
+
+        Implementations must return exactly one result per input, in input
+        order, and must not let one molecule's failure discard the rest of
+        the batch.
+        """
+        return [self.dock(smiles) for smiles in smiles_list]
 
 
 class OracleUnavailableError(RuntimeError):

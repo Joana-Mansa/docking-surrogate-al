@@ -187,6 +187,7 @@ def cmd_dock(args: argparse.Namespace) -> int:
                 smiles,
                 cache,
                 n_workers=cfg.oracle.n_workers,
+                batch_size=cfg.oracle.ligand_batch_size,
                 retry_failures=args.retry_failures,
             )
             timer.add_samples(stats.docked)

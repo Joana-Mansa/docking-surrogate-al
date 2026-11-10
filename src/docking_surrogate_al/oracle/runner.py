@@ -49,6 +49,7 @@ class DockingRunStats:
     failed: int
     wall_clock_s: float
     workers: int
+    batch_size: int = 1
 
     def to_dict(self) -> dict[str, float | int]:
         """Return a manifest-ready mapping."""
@@ -60,6 +61,7 @@ class DockingRunStats:
             "failed": self.failed,
             "wall_clock_s": round(self.wall_clock_s, 2),
             "workers": self.workers,
+            "ligand_batch_size": self.batch_size,
             "molecules_per_second": (
                 round(self.docked / self.wall_clock_s, 3) if self.wall_clock_s > 0 and self.docked else 0.0
             ),
@@ -84,19 +86,52 @@ def _init_worker(oracle: DockingOracle) -> None:
     _WORKER_ORACLE = oracle
 
 
-def _dock_one(smiles: str) -> OracleResult:
+def _dock_batch(batch: tuple[str, ...]) -> list[OracleResult]:
+    """Dock one batch in a worker process.
+
+    Returns one result per input even when the backend raises, so a single
+    pathological batch cannot take down the pool or silently drop molecules.
+    """
     assert _WORKER_ORACLE is not None, "worker initialised without an oracle"
     try:
-        return _WORKER_ORACLE.dock(smiles)
+        results = _WORKER_ORACLE.dock_many(batch)
     except Exception as exc:  # noqa: BLE001 - a worker must never kill the pool
-        return OracleResult(
-            smiles=smiles,
-            score=None,
-            backend=_WORKER_ORACLE.name,
-            backend_version="unknown",
-            status="dock_failed",
-            error=f"unhandled worker exception: {type(exc).__name__}: {exc}",
-        )
+        return [
+            OracleResult(
+                smiles=smiles,
+                score=None,
+                backend=_WORKER_ORACLE.name,
+                backend_version="unknown",
+                status="dock_failed",
+                error=f"unhandled worker exception: {type(exc).__name__}: {exc}",
+            )
+            for smiles in batch
+        ]
+
+    if len(results) != len(batch):
+        # A backend that loses molecules would corrupt the cache silently;
+        # fail loudly for the whole batch instead.
+        return [
+            OracleResult(
+                smiles=smiles,
+                score=None,
+                backend=_WORKER_ORACLE.name,
+                backend_version="unknown",
+                status="dock_failed",
+                error=(
+                    f"backend returned {len(results)} results for a batch of "
+                    f"{len(batch)}; refusing to guess the alignment"
+                ),
+            )
+            for smiles in batch
+        ]
+    return results
+
+
+def chunk(items: Sequence[str], size: int) -> list[tuple[str, ...]]:
+    """Split ``items`` into consecutive batches of at most ``size``."""
+    size = max(1, size)
+    return [tuple(items[i : i + size]) for i in range(0, len(items), size)]
 
 
 def dock_molecules(
@@ -105,6 +140,7 @@ def dock_molecules(
     cache: DockingCache,
     *,
     n_workers: int | None = None,
+    batch_size: int = 25,
     retry_failures: bool = False,
     progress_every: int = 25,
     on_result: Callable[[OracleResult], None] | None = None,
@@ -116,6 +152,9 @@ def dock_molecules(
         smiles_list: Canonical SMILES to dock.
         cache: Cache to read from and append to.
         n_workers: CPU processes; None means ``cpu_count() - 1``.
+        batch_size: Ligands handed to the backend per invocation. Larger
+            batches amortise smina's per-call receptor setup; 1 restores
+            one process per molecule.
         retry_failures: Re-attempt molecules whose cached result failed.
         progress_every: Log progress every N molecules.
         on_result: Optional callback invoked for each completed molecule.
@@ -142,23 +181,28 @@ def dock_molecules(
     failed = 0
 
     if todo:
+        batches = chunk(todo, batch_size)
+        logger.info(
+            "Dispatching %d batch(es) of up to %d ligand(s) each.", len(batches), batch_size
+        )
         # "spawn" is the only start method available on Windows and avoids
         # fork-safety problems with RDKit's global state elsewhere.
         context = mp.get_context("spawn")
+        finished = 0
         with context.Pool(
             processes=workers, initializer=_init_worker, initargs=(oracle,)
         ) as pool:
-            for finished, result in enumerate(
-                pool.imap_unordered(_dock_one, todo, chunksize=1), start=1
-            ):
-                cache.append(result)
-                if result.ok:
-                    succeeded += 1
-                else:
-                    failed += 1
-                if on_result is not None:
-                    on_result(result)
-                if finished % progress_every == 0 or finished == len(todo):
+            for batch_results in pool.imap_unordered(_dock_batch, batches, chunksize=1):
+                for result in batch_results:
+                    cache.append(result)
+                    finished += 1
+                    if result.ok:
+                        succeeded += 1
+                    else:
+                        failed += 1
+                    if on_result is not None:
+                        on_result(result)
+                if finished % progress_every < batch_size or finished == len(todo):
                     elapsed = perf_counter() - start
                     rate = finished / elapsed if elapsed > 0 else 0.0
                     remaining = (len(todo) - finished) / rate if rate > 0 else float("nan")
@@ -181,6 +225,7 @@ def dock_molecules(
         failed=failed,
         wall_clock_s=elapsed,
         workers=workers,
+        batch_size=batch_size,
     )
     if failed:
         logger.warning(

@@ -1,5 +1,12 @@
 # Smoke-test configuration: the whole pipeline on 200 molecules, CPU-only,
-# in under five minutes.
+# in about seven minutes on a 3-core CI runner.
+#
+# The original target was five minutes. That turned out to be unreachable
+# with a real docking oracle at 200 molecules: measured per-ligand cost is
+# ~5.9s of conformer embedding plus search, so 200 molecules on 3 workers
+# has a floor near 393s no matter how the smina calls are batched. The
+# molecule count was kept and the budget raised, rather than shrinking the
+# smoke set until a number passed.
 #
 # This is what CI runs and what a first-time user should run before anything
 # else. Two deliberate properties:

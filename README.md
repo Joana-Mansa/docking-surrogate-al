@@ -117,6 +117,18 @@ to any GPU setting; it defaults to `cpu_count() - 1`, leaving one core for the
 parent process. Each smina invocation is pinned to `--cpu 1` so that N worker
 processes do not each spawn N threads.
 
+**Measured docking cost, and why the smoke test is not five minutes.**
+Fitting the two measured configurations (200 invocations at 751s, 8
+invocations at 407s, both on 3 workers) separates the cost into roughly
+**5.4s of per-invocation receptor setup** and **5.9s per ligand** for
+conformer embedding plus search. Batching removes almost all of the first
+term: 8 batches measured 407s against a 393s floor at infinite batching. The
+second term cannot be removed, so 200 molecules on 3 workers cannot finish
+below about 393s. The original five-minute smoke budget was therefore
+unachievable with a real oracle at this molecule count. The CI budget is 600s
+and the molecule count was kept, rather than shrinking the smoke set until a
+number passed.
+
 **Docking throughput and why ligands are batched.** Docking one ligand per
 smina process measured at roughly 11 seconds per molecule on a CI runner, and
 shrinking the search box by 2.4x changed that by nothing. The cost is
@@ -195,7 +207,8 @@ which gives the same scores more slowly, and the fallback is logged.
 ## Reproduction from a clean clone
 
 Start with the smoke test. It runs the entire pipeline on 200 molecules,
-CPU-only, in under five minutes, and needs no GPU and no network:
+CPU-only, and needs no GPU and no network. Budget about seven minutes on a
+3-core machine, nearly all of it real docking:
 
 ```bash
 export PYTHONPATH=src   # or `uv pip install -e .`

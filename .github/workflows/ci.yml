@@ -1,0 +1,147 @@
+name: CI
+
+# Two jobs:
+#
+#   tests  - the pytest suite, CPU-only, no external binaries.
+#   smoke  - the whole pipeline end to end on 200 molecules, including real
+#            smina docking, under a five-minute budget for the pipeline itself.
+#
+# Both install from requirements-cpu.txt rather than pyproject.toml, because
+# pyproject pins the CUDA build of torch (cu128) deliberately and that wheel
+# cannot be installed on a GPU-less runner. See the README.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONPATH: src
+
+jobs:
+  tests:
+    name: Unit tests (Python 3.11, CPU)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-cpu.txt
+
+      - name: Report environment
+        run: |
+          python -c "import torch, rdkit, torch_geometric; print('torch', torch.__version__); print('rdkit', rdkit.__version__); print('pyg', torch_geometric.__version__); print('cuda available:', torch.cuda.is_available())"
+
+      - name: Run tests
+        run: pytest tests -q --durations=10
+
+  smoke:
+    name: Smoke test (full pipeline, 200 molecules, CPU)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash -el {0}  # login shell, so the conda env is activated
+    steps:
+      - uses: actions/checkout@v4
+
+      # smina is CPU-only and is not on PyPI, so it comes from conda-forge.
+      # Open Babel comes with it and is used to prepare the receptor PDBQT.
+      - name: Install smina and Open Babel
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: docking
+          create-args: >-
+            python=3.11
+            smina
+            openbabel
+          condarc: |
+            channels:
+              - conda-forge
+              - bioconda
+
+      - name: Verify the docking binaries
+        run: |
+          which smina obabel
+          smina --version | head -2
+          nproc
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-cpu.txt
+
+      - name: Assert the smoke config is CPU-only
+        run: |
+          python - <<'PY'
+          from docking_surrogate_al.config import load_config
+          cfg = load_config("configs/smoke.yaml")
+          assert cfg.run.device == "cpu", f"smoke config must be CPU-only, got {cfg.run.device!r}"
+          assert cfg.data.source == "csv", "smoke config must not depend on the ChEMBL API"
+          print("smoke config OK:", cfg.run.device, cfg.data.source)
+          PY
+
+      # The five-minute budget is on the pipeline, not on dependency install.
+      # It is enforced rather than documented: a smoke test that quietly grows
+      # to twenty minutes stops being run.
+      - name: Run the full pipeline
+        run: |
+          start=$(date +%s)
+          python -m docking_surrogate_al.cli prepare-data --config configs/smoke.yaml
+          python -m docking_surrogate_al.cli dock         --config configs/smoke.yaml
+          python -m docking_surrogate_al.cli train        --config configs/smoke.yaml
+          python -m docking_surrogate_al.cli evaluate     --config configs/smoke.yaml
+          python -m docking_surrogate_al.cli run-al       --config configs/smoke.yaml
+          elapsed=$(( $(date +%s) - start ))
+          echo "Pipeline wall clock: ${elapsed}s"
+          if [ "$elapsed" -gt 300 ]; then
+            echo "::error::Smoke pipeline took ${elapsed}s, over the 300s budget."
+            exit 1
+          fi
+
+      - name: Check the expected artefacts exist
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          run = Path("runs/smoke")
+          for name in ("docked.csv", "metrics.csv", "active_learning.csv", "manifest.json"):
+              path = run / name
+              assert path.exists() and path.stat().st_size > 0, f"missing or empty: {path}"
+
+          manifest = json.loads((run / "manifest.json").read_text())
+          for key in ("config_hash", "git", "packages", "hardware", "stages", "seed"):
+              assert key in manifest, f"manifest is missing {key!r}"
+          assert manifest["hardware"]["device_type"] == "cpu"
+
+          docking = manifest.get("docking", {})
+          assert docking.get("succeeded", 0) > 0, "no molecule docked successfully"
+          print("docked OK:", docking)
+
+          figures = sorted(p.name for p in Path("figures").glob("smoke_*.png"))
+          assert figures, "no figures were written"
+          print("figures:", figures)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-outputs
+          path: |
+            runs/smoke/
+            figures/
+          retention-days: 7

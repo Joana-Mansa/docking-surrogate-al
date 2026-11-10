@@ -15,12 +15,15 @@ requires-python = ">=3.11,<3.12"
 # README. torch-geometric itself is pure Python and is installed from PyPI,
 # but it dispatches to the CUDA kernels of whichever torch build is present,
 # so the torch pin is what fixes the CUDA version for the whole project.
+# numpy and scipy are deliberately NOT at their latest releases: numpy 2.5+
+# and scipy 1.18+ require Python >= 3.12, which is outside this project's
+# requires-python. Bumping them makes the project uninstallable on 3.11.
 dependencies = [
     "torch==2.9.1+cu128",
     "torch-geometric==2.8.1",
     "rdkit==2026.3.6",
-    "numpy==2.5.4",
-    "scipy==1.18.1",
+    "numpy==2.4.6",
+    "scipy==1.17.1",
     "pandas==3.1.1",
     "matplotlib==3.11.2",
     "pyyaml==6.0.3",

@@ -22,18 +22,20 @@ answers.
 
 ## Status
 
-The pipeline is implemented and the test suite passes (91 tests). What has and
-has not actually been executed:
+The pipeline is implemented and the test suite passes: CI reports **106 passed,
+1 skipped**. The skip is a smina integration test that only runs where the
+binary is on PATH, which is the smoke job rather than the unit-test job. What
+has and has not actually been executed:
 
 | Stage | Status |
 | --- | --- |
 | `prepare-data` | Run on the 200-molecule smoke set. |
-| `dock` | **Not run.** No smina binary was available on the development machine (Windows). The docking stage is exercised by CI on Linux, which installs smina from conda-forge and docks the smoke set for real. |
-| `train`, `evaluate`, `run-al` | Run end to end on CPU with the smoke config, using placeholder scores standing in for the oracle, so every code path outside `dock` is verified. |
-| GPU training | **Not run.** The development machine has a 6 GB RTX 3050 but `smina` was unavailable, so there was no docked pool to train on. The CUDA code paths are implemented and device resolution is tested, but no GPU training run has been performed. |
+| `dock` | **Run.** 200/200 molecules docked against 3PTB with 0 failures in CI on Linux: 446s on 3 workers, 8 batches of 25, within the 600s budget. With the 20 A box restored, **zero** molecules were excluded as non-physical, so the clash scores that motivated `data.max_docking_score` came entirely from the undersized box. No smina binary is available on the development machine (Windows), so docking is only ever exercised on Linux. |
+| `train`, `evaluate`, `run-al` | **Run** end to end on real smina scores, on CPU in CI (472s for the whole pipeline) and on GPU on Kaggle. Every code path in the pipeline has now executed against oracle output rather than placeholders. |
+| GPU training | **Run** on a Kaggle Tesla T4 (14912 MiB, capability 7.5, CUDA 13.0) via `notebooks/kaggle_gpu_smoke.ipynb`. The manifest recorded `device_type: cuda`, `amp_enabled: true` for both splits, 66.7 MiB peak allocation and 471 samples/s on the scaffold split. This verifies that the CUDA paths, autocast, GradScaler, batched MC-dropout and the GPU manifest fields work on real hardware. It is a smoke run on 200 molecules; see the warning below about quoting its numbers. |
 | Multi-GPU (`uncertainty.ddp`) | **Not implemented.** It raises a clear error. See `src/docking_surrogate_al/models/ensemble.py` for the design and why DDP is the wrong tool for ensemble members. |
 | gnina backend | **Not implemented.** A documented stub that refuses to run. |
-| AMP parity check | **Not run**, for the same reason as GPU training. The script is `scripts/check_amp_parity.py`; see [Mixed precision](#mixed-precision). |
+| AMP parity check | **Run, but the result is not trustworthy and no figure is reported.** The GPU run that produced it predates the non-physical score fix below, so both the AMP and FP32 arms trained on a corrupted target distribution and the "within seed noise" verdict says only that they were corrupted equally. The check must be re-run on a clean pool before any parity figure is recorded. The script is `scripts/check_amp_parity.py`; see [Mixed precision](#mixed-precision). |
 
 **No experimental results are reported in this repository.** The numbers the
 smoke config produces are not results: 200 molecules, 3 active-learning rounds
@@ -171,9 +173,14 @@ test RMSE to the seed-to-seed standard deviation of the FP32 arm.
 python scripts/check_amp_parity.py --config configs/default.yaml --seeds 3
 ```
 
-**This check has not been run yet** (see [Status](#status)), so the README
-reports no parity figure. Record the output of the script here when a docked
-pool and a GPU are both available. The criterion is deliberately loose: it
+**The README reports no parity figure.** The check has been executed once, on a
+Kaggle T4, and it printed `passed: True`. That verdict is not evidence of
+anything: the run predates the non-physical score fix described under
+[A note on non-physical docking scores](#a-note-on-non-physical-docking-scores), so the AMP and
+FP32 arms were both trained on a target distribution whose standard deviation
+had been inflated 8.6x by clash scores. Two equally broken arms agreeing is not
+parity. Record a figure here only after re-running the script on a pool built
+with `data.max_docking_score` in force. The criterion is deliberately loose: it
 tests "within seed noise", not bit-identity, which would be false.
 
 ## Installation
@@ -302,7 +309,9 @@ Two defences:
 
 If more than a few percent of a pool comes back positive, the usual cause is
 that `target.size` is too small for the ligands being docked. Both shipped
-configs use a 20 Å box.
+configs use a 20 Å box. With that box, the same 200-molecule smoke set produces
+**zero** non-physical scores in CI, so the filter above is a safety net rather
+than something the default configuration relies on.
 
 ## Limitations
 

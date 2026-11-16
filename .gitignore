@@ -19,6 +19,15 @@ runs/
 figures/
 *.log
 
+# ...with one deliberate exception: results/ holds the committed evidence for
+# the runs the README actually reports. Figures, metrics and the manifest for
+# a published result are not regenerable in practice (they depend on a pool
+# that took hours to dock), so they are version-controlled artefacts, not
+# scratch output. Everything in results/ must carry a manifest.json naming
+# the config hash and git commit that produced it.
+!results/
+!results/**
+
 # Data. The small frozen smoke inputs and the prepared target ARE committed
 # (see data/smoke/ and data/targets/); bulk downloads and caches are not.
 data/raw/

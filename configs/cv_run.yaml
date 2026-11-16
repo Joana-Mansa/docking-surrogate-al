@@ -1,0 +1,121 @@
+# Reduced-scale real run.
+#
+# This is configs/default.yaml with the pool cut from 5000 molecules to 3000
+# and the active-learning schedule scaled to match. Everything that affects
+# the SCIENCE is left at the default: exhaustiveness 8, a 20 A box, the full
+# scaffold + random split protocol, 1000 bootstrap samples, 5 AL seeds and the
+# mandatory random baseline.
+#
+# Why reduced: docking is the cost. At exhaustiveness 8 a molecule costs tens
+# of CPU-seconds, so 5000 molecules is most of a day on 11 cores. 3000 fits a
+# single unattended run while still leaving a training pool large enough for a
+# 10-round AL curve whose seed bands do not swamp the strategy gap.
+#
+# Scores from this config ARE comparable with configs/default.yaml: the oracle
+# settings fingerprint is identical, so the docking cache is shared and a later
+# 5000-molecule run reuses every molecule docked here.
+#
+# Split of labour on the development machine: docking runs under WSL (smina is
+# not available on Windows), training and evaluation run on the Windows-side
+# RTX 3050. Both see the same repository and the same cache file.
+
+run:
+  name: cv_run
+  seed: 0
+  output_dir: runs
+  device: auto
+
+data:
+  source: chembl
+  raw_path: data/raw/cv_run_raw.csv
+  processed_path: data/processed/cv_run.csv
+  strip_salts: true
+  neutralise: true
+  min_heavy_atoms: 8
+  max_heavy_atoms: 60
+  chembl:
+    n_molecules: 3000
+    page_size: 1000
+    min_mw: 200.0
+    max_mw: 500.0
+    max_alogp: 5.0
+    max_ro5_violations: 0
+
+target:
+  name: trypsin_3ptb
+  receptor_pdb: data/targets/trypsin_3ptb/receptor_raw.pdb
+  receptor_pdbqt: data/targets/trypsin_3ptb/receptor.pdbqt
+  center: [-1.76, 14.46, 16.92]
+  size: [20.0, 20.0, 20.0]
+
+oracle:
+  backend: smina
+  smina_binary: smina
+  # Unchanged from default.yaml. Lowering this would make the scores
+  # incomparable with the default config and poison the shared cache, which is
+  # why the smoke config's exhaustiveness 1 lives under a different fingerprint.
+  exhaustiveness: 8
+  num_modes: 9
+  seed: 0
+  # null means cpu_count() - 1. On the 12-core dev machine that is 11.
+  n_workers: null
+  ligand_batch_size: 25
+  timeout_s: 600
+  cache_path: cache/docking_cache.jsonl
+  embed_max_attempts: 10
+  ff_max_iters: 500
+
+model:
+  hidden_dim: 128
+  num_layers: 4
+  dropout: 0.15
+  pool: mean_max
+  residual: true
+
+train:
+  epochs: 150
+  batch_size: 64
+  lr: 0.001
+  weight_decay: 0.00001
+  # Windows forces this to 0 in the dataloader; see data/dataset.py.
+  num_workers: 4
+  pin_memory: true
+  amp: true
+  grad_clip: 5.0
+  early_stopping_patience: 25
+  lr_scheduler_patience: 10
+  checkpoint_every_epoch: true
+
+uncertainty:
+  method: mc_dropout
+  mc_passes: 30
+  mc_chunk: 10
+  ensemble_size: 5
+  ddp: false
+  ddp_world_size: 1
+
+evaluation:
+  splits: [scaffold, random]
+  test_frac: 0.2
+  val_frac: 0.1
+  bootstrap_samples: 1000
+  bootstrap_ci: 0.95
+  ef_fractions: [0.01, 0.05]
+  precision_k: [10, 50, 100]
+  calibration_bins: 10
+
+al:
+  # Scaled to the ~2999-molecule pool. Retrospective AL draws from the WHOLE
+  # docked pool, not the train split (see cli.py cmd_run_al), so the schedule
+  # is sized against 2999: 300 seed + 180 x 10 rounds = 2100 oracle calls, or
+  # 70% of the pool. Deliberately short of exhausting it: once a campaign has
+  # labelled everything, every strategy converges by construction and the tail
+  # of the curve stops being informative. top_k 100 is the top 3.3%.
+  initial_size: 300
+  batch_size: 180
+  rounds: 10
+  seeds: [0, 1, 2, 3, 4]
+  # 'random' is mandatory: it is the claim the plot has to beat.
+  strategies: [uncertainty, greedy, random]
+  top_k: 100
+  epochs_per_round: 60

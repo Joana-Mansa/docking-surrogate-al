@@ -1,93 +1,45 @@
 # docking-surrogate-al
 
-A graph neural network that approximates molecular docking scores, and an
-uncertainty-guided active-learning loop that reduces the number of expensive
-docking calls needed to find top-scoring compounds.
+[![CI](https://github.com/Joana-Mansa/docking-surrogate-al/actions/workflows/ci.yml/badge.svg)](https://github.com/Joana-Mansa/docking-surrogate-al/actions/workflows/ci.yml)
 
-Docking a large library is slow: a single molecule costs seconds of CPU, so a
-million-compound screen is CPU-months. The premise here is that a surrogate
-trained on a few thousand docked molecules can rank the rest, and that choosing
-*which* molecules to dock by model uncertainty beats docking them at random.
-Both halves of that claim are measured, against a random baseline, on held-out
-scaffolds.
+A graph neural network that predicts molecular docking scores, and an
+uncertainty-guided active-learning loop that reaches the top-scoring compounds
+in a library using fewer docking calls than random selection.
 
-## What this is
+Docking is expensive: tens of CPU-seconds per molecule, so a million-compound
+screen is CPU-months. This measures two things. How faithfully can a GNN
+reproduce the docking oracle on unseen scaffolds, and how many oracle calls
+does uncertainty-guided selection save against a random baseline.
 
-Research code written to be checkable rather than impressive:
+> **Docking scores are not experimental binding affinities.** A surrogate that
+> predicts docking well has learned to imitate docking, including its errors.
+> This project makes no claim about real binding affinity or therapeutic
+> relevance.
 
-- **A real oracle in CI.** The GitHub Actions smoke job installs `smina` from
-  conda-forge and docks 200 molecules for real on every push, end to end
-  through all five pipeline stages. It is an integration test, not a mock.
-- **Resumable by construction.** The docking cache is append-only JSONL with a
-  flush and fsync per record, keyed by canonical SMILES plus a settings
-  fingerprint. Kill the process at any point and it resumes with nothing lost
-  and nothing silently re-docked under different settings.
-- **Two splits, always reported side by side.** Bemis-Murcko scaffold and
-  random, with a test that asserts no scaffold leaks across the boundary. The
-  random split flatters the model; showing only that number would be the easy
-  lie, so both are always reported.
-- **Uncertainty that is calibrated, not just produced.** MC-dropout (stochastic
-  passes batched into single GPU forward calls, not looped one at a time) or
-  deep ensembles behind a config switch, scored with reliability curves, ECE
-  and error-vs-uncertainty correlation.
-- **Error bars on everything.** Non-parametric paired bootstrap resampling
-  molecules, not residuals, so the rank metrics (Spearman, enrichment factor,
-  precision@k) stay valid.
-- **Every run is reconstructible.** A JSON manifest records the config hash,
-  git commit, package versions, GPU name, VRAM, CUDA version, peak memory,
-  samples/second and per-stage wall clock alongside every result.
-- **Mixed precision with a parity check, not a promise.** `scripts/check_amp_parity.py`
-  trains the same config with AMP on and off across seeds and compares the gap
-  to seed-to-seed variance.
+## Quickstart
 
-~8,500 lines of Python, 106 tests. Python 3.11, PyTorch Geometric, RDKit,
-smina. Device comes from config and is asserted at startup; nothing is
-hardcoded to CPU or GPU.
+```bash
+git clone https://github.com/Joana-Mansa/docking-surrogate-al.git
+cd docking-surrogate-al
+uv sync                                    # GPU, CUDA 12.8
+conda install -c conda-forge smina openbabel
 
-## Scientific framing
+export PYTHONPATH=src
+for stage in prepare-data dock train evaluate run-al; do
+  python -m docking_surrogate_al.cli $stage --config configs/smoke.yaml
+done
+```
 
-**Docking scores are not experimental binding affinities.** A surrogate that
-predicts docking well has learned to imitate docking, including its errors.
-This project measures surrogate fidelity to the physics oracle and the sample
-efficiency of active learning. It makes no claim about real binding affinity
-or therapeutic relevance.
-
-Everything downstream follows from that. The target variable is whatever smina
-outputs for a given receptor, box and exhaustiveness. If smina is wrong about
-a molecule, a perfect surrogate is wrong about it in exactly the same way, and
-nothing in this repository would detect that. The questions this code can
-answer are "how closely does the surrogate reproduce the oracle" and "how many
-oracle calls does the surrogate save", and those are the only questions it
-answers.
-
-## Status
-
-The pipeline is implemented and the test suite passes: CI reports **106 passed,
-1 skipped**. The skip is a smina integration test that only runs where the
-binary is on PATH, which is the smoke job rather than the unit-test job. What
-has and has not actually been executed:
-
-| Stage | Status |
-| --- | --- |
-| `prepare-data` | Run on the 200-molecule smoke set. |
-| `dock` | **Run.** 200/200 molecules docked against 3PTB with 0 failures in CI on Linux: 446s on 3 workers, 8 batches of 25, within the 600s budget. With the 20 A box restored, **zero** molecules were excluded as non-physical, so the clash scores that motivated `data.max_docking_score` came entirely from the undersized box. No smina binary is available on the development machine (Windows), so docking is only ever exercised on Linux. |
-| `train`, `evaluate`, `run-al` | **Run** end to end on real smina scores, on CPU in CI (472s for the whole pipeline) and on GPU on Kaggle. Every code path in the pipeline has now executed against oracle output rather than placeholders. |
-| GPU training | **Run** on a Kaggle Tesla T4 (14912 MiB, capability 7.5, CUDA 13.0) via `notebooks/kaggle_gpu_smoke.ipynb`. The manifest recorded `device_type: cuda`, `amp_enabled: true` for both splits, 66.7 MiB peak allocation and 471 samples/s on the scaffold split. This verifies that the CUDA paths, autocast, GradScaler, batched MC-dropout and the GPU manifest fields work on real hardware. It is a smoke run on 200 molecules; see the warning below about quoting its numbers. |
-| Multi-GPU (`uncertainty.ddp`) | **Not implemented.** It raises a clear error. See `src/docking_surrogate_al/models/ensemble.py` for the design and why DDP is the wrong tool for ensemble members. |
-| gnina backend | **Not implemented.** A documented stub that refuses to run. |
-| AMP parity check | **Run, but the result is not trustworthy and no figure is reported.** The GPU run that produced it predates the non-physical score fix below, so both the AMP and FP32 arms trained on a corrupted target distribution and the "within seed noise" verdict says only that they were corrupted equally. The check must be re-run on a clean pool before any parity figure is recorded. The script is `scripts/check_amp_parity.py`; see [Mixed precision](#mixed-precision). |
-
-**No experimental results are reported in this repository.** The numbers the
-smoke config produces are not results: 200 molecules, 3 active-learning rounds
-and docking exhaustiveness 1 exist to exercise code paths cheaply. They should
-never be quoted.
+The smoke config runs the whole pipeline on 200 molecules, CPU-only, no
+network, in about seven minutes. It is what CI runs on every push. For a CPU
+install use `requirements-cpu.txt`; `pyproject.toml` pins a CUDA build.
 
 ## Pipeline
 
 ```
-prepare-data  ChEMBL download (or a local CSV) -> RDKit standardisation
+prepare-data  ChEMBL download (or local CSV) -> RDKit standardisation
      |
-   dock       smina against one prepared target, parallel over CPU cores,
+   dock       smina against one target, parallel over CPU cores,
      |        every result cached by canonical SMILES
    train      GINE graph network, one model per split, AMP + checkpoints
      |
@@ -96,307 +48,148 @@ prepare-data  ChEMBL download (or a local CSV) -> RDKit standardisation
   run-al      uncertainty / greedy / random acquisition, 10 rounds, 5 seeds
 ```
 
-### Design choices worth knowing
-
-- **The oracle is an interface.** smina is CPU-only; a CUDA-capable backend
-  (gnina) should be addable without touching anything upstream. No module
-  outside `oracle/` imports smina. Every cached score records which backend
-  and version produced it.
-- **The docking cache is an append-only log**, flushed and fsynced per
-  molecule, keyed by `(canonical SMILES, settings fingerprint)`. An
-  interrupted docking run keeps every molecule that finished, and changing the
-  box or exhaustiveness starts a fresh partition rather than silently reusing
-  stale scores.
-- **Standardisation is the cache key.** It must be deterministic and
-  idempotent, or the same compound gets docked twice under two keys. Both
-  properties are asserted in the test suite.
-- **Dropout sits inside the encoder, not only the head.** Head-only dropout
-  would make MC-dropout sample readout noise while the learned representation
-  stayed fixed, which produces confident nonsense on exactly the
-  out-of-distribution molecules where uncertainty matters.
-- **MC-dropout passes are batched.** Each batch is replicated `mc_chunk` times
-  into a single forward pass rather than looping passes, with BatchNorm held
-  in eval mode so replication cannot leak into batch statistics.
-- **Both splits are always reported together.** The gap between scaffold and
-  random is the result that justifies the evaluation section.
-
-## Hardware requirements
-
-### GPU
-
-Training and inference run on CUDA. `run.device` is `cuda`, `cpu` or `auto`,
-taken from config and never hardcoded. `cuda` is a *requirement*: if CUDA is
-unavailable the run fails in the first second with a message naming what torch
-sees and what to do about it. Only `auto` is permitted to fall back, and it
-logs that it did.
-
-**CUDA version: 12.8.** `pyproject.toml` pins `torch==2.9.1+cu128` from the
-PyTorch cu128 index, declared explicitly under `[tool.uv.index]`. torch-geometric
-is pure Python and dispatches to whichever torch build is installed, so the
-torch pin is what fixes the CUDA version for the whole project. The cu128
-wheels need an NVIDIA driver of at least 525 (Linux) or 528 (Windows).
-
-### Defaults and VRAM
-
-The shipped defaults in `configs/default.yaml` target a **~6 GB** card (the
-RTX 3050 laptop GPU this was developed on), so a clean clone trains out of the
-box on modest hardware. The project was specified against a ~16 GB card;
-`configs/gpu_16gb.yaml` is that profile, with a larger batch size, wider
-model, more dataloader workers and all MC-dropout passes in one forward call.
-
-`train.batch_size`, `train.num_workers` and `train.pin_memory` are all config
-parameters. `pin_memory` is forced off on CPU, where it is pure overhead, and
-`num_workers` is forced to 0 on Windows, since the graphs are already in
-memory and the spawn start method would re-import RDKit per worker.
-
-The run manifest records GPU name, total VRAM, capability, CUDA version, peak
-allocated and reserved VRAM, and samples per second, alongside the CPU timings.
-
-### CPU
-
-smina is CPU-only. `oracle.n_workers` is a **CPU core** count and is unrelated
-to any GPU setting; it defaults to `cpu_count() - 1`, leaving one core for the
-parent process. Each smina invocation is pinned to `--cpu 1` so that N worker
-processes do not each spawn N threads.
-
-**Measured docking cost, and why the smoke test is not five minutes.**
-Fitting the two measured configurations (200 invocations at 751s, 8
-invocations at 407s, both on 3 workers) separates the cost into roughly
-**5.4s of per-invocation receptor setup** and **5.9s per ligand** for
-conformer embedding plus search. Batching removes almost all of the first
-term: 8 batches measured 407s against a 393s floor at infinite batching. The
-second term cannot be removed, so 200 molecules on 3 workers cannot finish
-below about 393s. The original five-minute smoke budget was therefore
-unachievable with a real oracle at this molecule count. The CI budget is 600s
-and the molecule count was kept, rather than shrinking the smoke set until a
-number passed.
-
-**Docking throughput and why ligands are batched.** Docking one ligand per
-smina process measured at roughly 11 seconds per molecule on a CI runner, and
-shrinking the search box by 2.4x changed that by nothing. The cost is
-therefore not search: it is the fixed per-invocation work of reading and
-atom-typing the receptor and building grid maps, paid once per molecule.
-`oracle.ligand_batch_size` (default 25) docks many ligands per invocation
-from a multi-model SDF so that setup is amortised across a batch. Set it to 1
-to restore one process per ligand.
-
-Results are matched back to molecules by the ligand *name* written into the
-SDF, never by output order, because smina omits ligands it fails to dock and
-position-based matching would silently shift scores onto the wrong molecules.
-`ligand_batch_size` is deliberately *not* part of the docking cache
-fingerprint, which assumes batching does not change scores; CI checks that
-assumption directly by docking the same molecules batched and unbatched and
-comparing (`tests/test_batched_docking.py`).
-
-### No GPU at all
-
-The smoke config is CPU-only and is what CI runs, so the repository is usable
-on a machine without a GPU. Install from `requirements-cpu.txt` rather than
-`pyproject.toml`: the latter pins the CUDA build deliberately and will not
-install without CUDA wheels.
-
-## Mixed precision
-
-`train.amp` defaults to on. Autocast runs the forward pass in fp16 while
-`GradScaler` keeps small gradients from flushing to zero; gradients are
-unscaled before clipping, so the clip threshold applies to real gradient
-magnitudes. On CPU, AMP is **automatically disabled with a log line**, because
-CPU autocast uses bfloat16 and is slower than fp32 for a model this size. This
-means leaving `amp: true` in a CPU config is harmless rather than a trap.
-
-The claim that AMP does not change results beyond seed variance is *checkable*
-rather than asserted: `scripts/check_amp_parity.py` trains the same config with
-AMP on and off across several seeds and compares the AMP-vs-FP32 gap in mean
-test RMSE to the seed-to-seed standard deviation of the FP32 arm.
-
-```bash
-python scripts/check_amp_parity.py --config configs/default.yaml --seeds 3
-```
-
-**The README reports no parity figure.** The check has been executed once, on a
-Kaggle T4, and it printed `passed: True`. That verdict is not evidence of
-anything: the run predates the non-physical score fix described under
-[A note on non-physical docking scores](#a-note-on-non-physical-docking-scores), so the AMP and
-FP32 arms were both trained on a target distribution whose standard deviation
-had been inflated 8.6x by clash scores. Two equally broken arms agreeing is not
-parity. Record a figure here only after re-running the script on a pool built
-with `data.max_docking_score` in force. The criterion is deliberately loose: it
-tests "within seed noise", not bit-identity, which would be false.
-
-## Installation
-
-Requires **Python 3.11** and [uv](https://docs.astral.sh/uv/).
-
-```bash
-git clone https://github.com/Joana-Mansa/docking-surrogate-al.git
-cd docking-surrogate-al
-
-# GPU (CUDA 12.8)
-uv sync
-
-# CPU only
-uv venv --python 3.11
-uv pip install -r requirements-cpu.txt
-```
-
-`smina` is not a Python package and must be installed separately:
-
-```bash
-conda install -c conda-forge smina openbabel   # recommended
-# or: apt-get install smina
-# or: a static build from https://sourceforge.net/projects/smina/
-```
-
-Open Babel is optional. If present, the receptor is converted to PDBQT once
-(faster, atom typing cached); if absent, smina reads the cleaned PDB directly,
-which gives the same scores more slowly, and the fallback is logged.
-
-## Reproduction from a clean clone
-
-Start with the smoke test. It runs the entire pipeline on 200 molecules,
-CPU-only, and needs no GPU and no network. Budget about seven minutes on a
-3-core machine, nearly all of it real docking:
-
-```bash
-export PYTHONPATH=src   # or `uv pip install -e .`
-python -m docking_surrogate_al.cli prepare-data --config configs/smoke.yaml
-python -m docking_surrogate_al.cli dock         --config configs/smoke.yaml
-python -m docking_surrogate_al.cli train        --config configs/smoke.yaml
-python -m docking_surrogate_al.cli evaluate     --config configs/smoke.yaml
-python -m docking_surrogate_al.cli run-al       --config configs/smoke.yaml
-```
-
-Then the full experiment, which needs smina, a GPU and several hours of CPU
-time for the docking stage:
-
-```bash
-python -m docking_surrogate_al.cli prepare-data --config configs/default.yaml
-python -m docking_surrogate_al.cli dock         --config configs/default.yaml
-python -m docking_surrogate_al.cli train        --config configs/default.yaml
-python -m docking_surrogate_al.cli evaluate     --config configs/default.yaml
-python -m docking_surrogate_al.cli run-al       --config configs/default.yaml
-```
-
-Scale to 50,000 molecules with `--set data.chembl.n_molecules=50000`. Nothing
-else needs to change.
-
+Five CLI entry points, one YAML config, no hardcoded paths or hyperparameters.
 Any stage can be interrupted and rerun; it resumes from the last checkpoint.
-Overrides go through the same validation as the config file:
 
 ```bash
 python -m docking_surrogate_al.cli train --config configs/default.yaml \
   --set train.batch_size=256 --set uncertainty.mc_chunk=30
 ```
 
-### Outputs
+## Evaluation
 
-- `runs/<name>/metrics.csv` — long form, one row per split and metric, with
-  bootstrap CIs.
-- `runs/<name>/active_learning.csv` — one row per (strategy, seed, round).
-- `runs/<name>/predictions_<split>.csv` — per-molecule predictions and sigma.
-- `runs/<name>/manifest.json` — config hash, git commit and dirty flag,
-  package versions, hardware, seed, and wall-clock time, throughput and peak
-  VRAM per stage.
-- `figures/` — all figures at 300 dpi.
-- `cache/docking_cache.jsonl` — every docking result, with its backend.
+Every metric is reported on **both** a Bemis-Murcko scaffold split and a random
+split. The random split flatters the model; reporting only that number would be
+the easy lie. A test asserts no scaffold appears on both sides of the boundary.
+
+| | |
+|---|---|
+| Fidelity | RMSE, Spearman rho |
+| Ranking | enrichment factor at 1% and 5%, precision@{10,50,100} |
+| Uncertainty | reliability curve, ECE, error-vs-sigma correlation |
+| Confidence | non-parametric paired bootstrap, 1000 resamples, 95% CI |
+
+The bootstrap resamples molecules rather than residuals, which is what keeps
+the rank metrics valid. Active learning runs 3 strategies x 5 seeds x 10
+rounds, with the random baseline plotted in the same weight as the others.
+
+## Design notes
+
+- **The oracle is an interface.** smina is CPU-only; a CUDA backend (gnina)
+  can be added without touching anything upstream. Nothing outside `oracle/`
+  imports smina, and every cached score records which backend produced it.
+- **The docking cache is an append-only log**, fsynced per record and keyed by
+  `(canonical SMILES, settings fingerprint)`. Interrupted runs keep everything
+  finished; changing the box or exhaustiveness starts a fresh partition instead
+  of silently reusing stale scores.
+- **Ligands are batched per smina call.** Receptor setup dominates per-molecule
+  cost, so `oracle.ligand_batch_size` amortises it. Results are matched back by
+  ligand name, never output order, because smina omits ligands it fails to
+  dock. CI verifies batched and unbatched scores agree.
+- **Dropout sits inside the encoder, not only the head**, so MC-dropout samples
+  representation uncertainty rather than readout noise. Passes are batched into
+  single forward calls with BatchNorm held in eval.
+- **Positive docking scores are steric clashes, not weak binding.** Left in,
+  a handful dominate the target scaler. `data.max_docking_score` excludes them
+  at pool construction, the cache keeps what the oracle actually returned, and
+  every run reports how many were dropped.
+- **Standardisation is the cache key**, so it must be deterministic and
+  idempotent. Both are asserted in tests.
+
+## Hardware
+
+`run.device` is `cuda`, `cpu` or `auto`, taken from config and never
+hardcoded. `cuda` is a requirement: if CUDA is missing the run fails in the
+first second with a message naming what torch sees. Only `auto` falls back, and
+it logs that it did.
+
+**CUDA 12.8**, pinned via `torch==2.9.1+cu128` from the PyTorch cu128 index.
+Driver 525+ (Linux) or 528+ (Windows).
+
+`configs/default.yaml` targets a ~6 GB card so a clean clone trains out of the
+box; `configs/gpu_16gb.yaml` is the larger profile. Batch size, dataloader
+workers and pin_memory are all config parameters.
+
+Mixed precision defaults on, with gradients unscaled before clipping, and is
+auto-disabled on CPU where bfloat16 autocast is slower than fp32.
+`scripts/check_amp_parity.py` trains with AMP on and off across seeds and
+compares the gap to seed-to-seed variance, so the "AMP changes nothing" claim
+is checkable rather than asserted.
+
+smina is CPU-only. `oracle.n_workers` is a CPU core count, defaulting to
+`cpu_count() - 1`, and each invocation is pinned to `--cpu 1`.
+
+## Outputs
+
+Every run writes a manifest recording the config hash, git commit and dirty
+flag, package versions, GPU name, VRAM, CUDA version, peak memory, throughput
+and per-stage wall clock, so any result can be traced to what produced it.
+
+```
+runs/<name>/metrics.csv              one row per split and metric, with CIs
+runs/<name>/active_learning.csv      one row per (strategy, seed, round)
+runs/<name>/predictions_<split>.csv  per-molecule prediction and sigma
+runs/<name>/manifest.json            provenance and hardware
+figures/                             all figures at 300 dpi
+cache/docking_cache.jsonl            every docking result, with its backend
+```
 
 ## The target
 
 Trypsin with benzamidine bound (PDB **3PTB**), box centred on the
-co-crystallised benzamidine at `(-1.76, 14.46, 16.92)`.
-
-It was chosen for being small, fast to dock and a long-standing docking
-validation system, **not** for therapeutic interest. The ChEMBL molecules
-screened against it are drug-like compounds with no particular relationship to
-trypsin. That is consistent with the framing above: the experiment measures
-whether a surrogate can imitate an oracle, and for that the target only has to
-be a well-defined, reproducible scoring function. Target, box and
-exhaustiveness are all config parameters.
+co-crystallised ligand. Chosen for being small, fast to dock and a standard
+docking validation system, not for therapeutic interest. Target, box and
+exhaustiveness are config parameters.
 
 ## Testing
 
 ```bash
-PYTHONPATH=src pytest tests -q
+PYTHONPATH=src pytest tests -q        # 106 tests
 ```
 
-106 tests covering data standardisation (including idempotence, since the
-canonical SMILES is the cache key), scaffold splitting (asserting no scaffold
-overlap between train and test, and that the guard fires on a deliberately
-leaky split), every metric against hand-computed values, calibration against
-synthetic calibrated and miscalibrated predictions, acquisition strategies,
-the docking cache under simulated interruption, config validation, and
-checkpoint/resume — the last comparing a 3-epoch-plus-resume run against an
-uninterrupted 6-epoch run, not merely checking that a file loads.
+Covers standardisation idempotence (it is the cache key), scaffold-split
+leakage in both directions, every metric against hand-computed values,
+calibration against synthetic calibrated and miscalibrated predictions,
+acquisition strategies, the cache under simulated interruption, and
+checkpoint/resume compared against an uninterrupted run rather than merely
+checking a file loads.
 
-## A note on non-physical docking scores
+CI runs the unit tests and, separately, the entire pipeline against a real
+smina binary installed from conda-forge. It is an integration test, not a mock.
 
-smina returns large **positive** affinities when a ligand cannot fit the box
-without steric clash. Those are a report that docking failed, not a weak
-binding estimate, and as regression targets a handful of them dominate
-everything: on a 200-molecule run with a too-small box, 26 clash scores (worst
-+110.76 kcal/mol) inflated the target standard deviation from 1.23 to 10.56
-and drove test RMSE to ~10 on a target spanning about 7 kcal/mol.
+## Not implemented
 
-Two defences:
+Both of these raise a clear error rather than failing quietly:
 
-- `data.max_docking_score` (default 0.0) excludes them from the modelling
-  pool. The filter is applied at pool construction, not in the oracle, so the
-  cache keeps exactly what the oracle returned and the exclusion stays a
-  visible, configurable modelling decision. Every run reports how many were
-  dropped, and warns loudly if it exceeds 5% of the pool.
-- The `dock` stage records the count, fraction and worst score in the run
-  manifest under `docking_quality`.
-
-If more than a few percent of a pool comes back positive, the usual cause is
-that `target.size` is too small for the ligands being docked. Both shipped
-configs use a 20 Å box. With that box, the same 200-molecule smoke set produces
-**zero** non-physical scores in CI, so the filter above is a safety net rather
-than something the default configuration relies on.
+- **Multi-GPU ensemble training** (`uncertainty.ddp`). DDP all-reduces
+  gradients across ranks, which would converge ensemble members into one model
+  and collapse the predictive spread the ensemble exists to measure. The right
+  design is member-parallel, which could not be tested on a single-GPU machine,
+  so it is specified in `models/ensemble.py` and left unshipped.
+- **The gnina backend.** A documented stub showing where a CUDA-capable oracle
+  would plug in.
 
 ## Limitations
 
-- **Single target.** One protein, one box, one exhaustiveness setting.
-  Nothing here shows the approach transfers to another target, and docking
-  surrogates are known to be target-specific.
-- **Docking as ground truth.** The oracle is smina, not an experiment. The
-  surrogate is trained to reproduce the oracle's errors as faithfully as its
-  successes. Reported fidelity is fidelity *to smina*.
-- **No experimental validation.** Nothing in this repository has been checked
-  against measured binding affinity, and no molecule has been synthesised or
-  assayed.
-- **Scaffold split is still optimistic.** It removes the most obvious leakage,
-  but train and test molecules still come from the same library, prepared the
-  same way, docked against the same receptor with the same box. True
-  prospective use means new chemistry from a different source, which is harder
-  than anything measured here.
-- **Clash scores are excluded, not modelled.** Molecules that cannot fit
-  the box are dropped from the pool rather than treated as very weak binders.
-  That is the right call for a binding-score surrogate, but it means the
-  reported metrics describe performance on molecules that dock at all, and a
-  real campaign would still pay oracle calls for the ones that do not.
-- **Small chemical space.** 5,000 molecules by default (50,000 at the
-  configured ceiling) is a narrow slice of drug-like space. Enrichment at 1%
-  on a few hundred test molecules is coarse: the top 1% may be two molecules,
-  so that metric takes few distinct values and has a wide, lumpy confidence
-  interval. `n_test` is reported alongside every metric so this is visible.
-- **Retrospective active learning.** The pool is docked once up front, and
-  "calling the oracle" reveals a precomputed label. This makes 150 campaigns
-  affordable and removes docking noise between strategies, but it cannot
-  discover molecules outside the pool. The curves measure sample efficiency
-  *within a fixed library*.
-- **Uncertainty is approximate.** MC-dropout approximates a posterior over
-  weights and captures epistemic uncertainty only; it does not model the
-  oracle's own variability. This is why calibration is measured and reported
-  rather than assumed.
-- **Single starting conformer per ligand.** smina searches ligand torsions
-  internally, but a single ETKDG conformer is still an input choice that
-  affects scores.
-- **Conservative receptor preparation.** Waters and heteroatoms are stripped;
-  missing loops are not modelled, protonation states are not assigned per
-  residue, and side chains are rigid.
-- **Seed variance bands are single-machine.** They bound rerun-to-rerun
-  variation on one GPU with one library stack, not variation across machines,
-  drivers or library versions.
+- **One target, one box, one exhaustiveness.** Nothing here shows the approach
+  transfers; docking surrogates are known to be target-specific.
+- **The oracle is smina, not an experiment.** Reported fidelity is fidelity to
+  smina, including its errors. No molecule has been synthesised or assayed.
+- **Scaffold split is still optimistic.** Train and test molecules come from
+  the same library, prepared the same way, docked against the same receptor.
+  Prospective use means new chemistry from a different source.
+- **Active learning is retrospective.** The pool is docked up front and an
+  "oracle call" reveals a precomputed label. This makes 150 campaigns
+  affordable but cannot discover molecules outside the pool, so the curves
+  measure sample efficiency within a fixed library.
+- **Clash scores are excluded, not modelled.** Metrics therefore describe
+  molecules that dock at all, while a real campaign still pays for the ones
+  that do not.
+- **Uncertainty is epistemic only.** MC-dropout does not model the oracle's own
+  variability, which is why calibration is measured rather than assumed.
+- **Small chemical space.** A few thousand molecules is a narrow slice of
+  drug-like space, and enrichment at 1% on a few hundred test molecules is
+  coarse. `n_test` is reported alongside every metric so this stays visible.
 
 ## Licence
 

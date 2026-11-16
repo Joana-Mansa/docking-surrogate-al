@@ -110,11 +110,30 @@ jobs:
       # enforced rather than documented: a smoke test that quietly grows to
       # twenty minutes stops being run.
       #
-      # 600s, not the 300s originally specified. Measured on this runner:
-      # per-invocation receptor setup is ~5.4s and per-ligand embed+search is
-      # ~5.9s, so 200 molecules on 3 workers cannot go below ~393s however
-      # perfectly the smina calls are batched. 300s was unreachable with a
-      # real oracle at this molecule count. See the README.
+      # It catches a REGRESSION that makes the smoke test unusably slow. It is
+      # deliberately not a performance assertion, because a shared GitHub
+      # runner is not a stable enough clock to assert against. Measured on
+      # this runner, as (dock stage / whole pipeline):
+      #
+      #   394s / 413s   10 Nov, 14 A box. Not comparable: wrong box.
+      #   446s / 472s   10 Nov, 20 A box.
+      #   576s / 605s   11 Nov, 20 A box, README-only change on top.
+      #
+      # The last two differ by no docking code at all, yet the pipeline moved
+      # 472s -> 605s, a 28% spread. A 600s ceiling therefore sits inside the
+      # runner's own variance and fails at random, which is how a green build
+      # turned red on a documentation commit. 900s clears the worst
+      # observation by ~50% while still catching anything that genuinely
+      # doubles the runtime.
+      #
+      # 300s, as originally specified, was never reachable: per-invocation
+      # receptor setup is ~5.4s and per-ligand embed+search is ~5.9s, so 200
+      # molecules on 3 workers cannot go below ~393s however perfectly the
+      # smina calls are batched. See the README.
+      #
+      # Do NOT buy headroom by shrinking the molecule count or the docking
+      # box. Shrinking the box is exactly what produced the steric-clash
+      # scores that corrupted an earlier run; see configs/smoke.yaml.
       - name: Run the full pipeline
         run: |
           # Per-stage timing, so a budget overrun names the stage that caused
@@ -127,8 +146,8 @@ jobs:
           done
           elapsed=$(( $(date +%s) - start ))
           echo "Pipeline wall clock: ${elapsed}s"
-          if [ "$elapsed" -gt 600 ]; then
-            echo "::error::Smoke pipeline took ${elapsed}s, over the 600s budget."
+          if [ "$elapsed" -gt 900 ]; then
+            echo "::error::Smoke pipeline took ${elapsed}s, over the 900s budget."
             exit 1
           fi
 

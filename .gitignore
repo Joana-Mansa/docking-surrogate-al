@@ -9,7 +9,10 @@ venv/
 .pytest_cache/
 
 # uv
-# uv.lock IS committed deliberately: it is the reproducibility guarantee.
+# NOTE: uv.lock is NOT yet generated, so it is not committed. The pins in
+# pyproject.toml are exact (==), which is the current reproducibility
+# guarantee; a lockfile would additionally pin the transitive tree and
+# should be added with `uv lock` when uv is available.
 
 # Run outputs. Everything under runs/ is regenerable from a config + seed.
 runs/

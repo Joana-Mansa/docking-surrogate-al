@@ -4,6 +4,46 @@ A graph neural network that approximates molecular docking scores, and an
 uncertainty-guided active-learning loop that reduces the number of expensive
 docking calls needed to find top-scoring compounds.
 
+Docking a large library is slow: a single molecule costs seconds of CPU, so a
+million-compound screen is CPU-months. The premise here is that a surrogate
+trained on a few thousand docked molecules can rank the rest, and that choosing
+*which* molecules to dock by model uncertainty beats docking them at random.
+Both halves of that claim are measured, against a random baseline, on held-out
+scaffolds.
+
+## What this is
+
+Research code written to be checkable rather than impressive:
+
+- **A real oracle in CI.** The GitHub Actions smoke job installs `smina` from
+  conda-forge and docks 200 molecules for real on every push, end to end
+  through all five pipeline stages. It is an integration test, not a mock.
+- **Resumable by construction.** The docking cache is append-only JSONL with a
+  flush and fsync per record, keyed by canonical SMILES plus a settings
+  fingerprint. Kill the process at any point and it resumes with nothing lost
+  and nothing silently re-docked under different settings.
+- **Two splits, always reported side by side.** Bemis-Murcko scaffold and
+  random, with a test that asserts no scaffold leaks across the boundary. The
+  random split flatters the model; showing only that number would be the easy
+  lie, so both are always reported.
+- **Uncertainty that is calibrated, not just produced.** MC-dropout (stochastic
+  passes batched into single GPU forward calls, not looped one at a time) or
+  deep ensembles behind a config switch, scored with reliability curves, ECE
+  and error-vs-uncertainty correlation.
+- **Error bars on everything.** Non-parametric paired bootstrap resampling
+  molecules, not residuals, so the rank metrics (Spearman, enrichment factor,
+  precision@k) stay valid.
+- **Every run is reconstructible.** A JSON manifest records the config hash,
+  git commit, package versions, GPU name, VRAM, CUDA version, peak memory,
+  samples/second and per-stage wall clock alongside every result.
+- **Mixed precision with a parity check, not a promise.** `scripts/check_amp_parity.py`
+  trains the same config with AMP on and off across seeds and compares the gap
+  to seed-to-seed variance.
+
+~8,500 lines of Python, 106 tests. Python 3.11, PyTorch Geometric, RDKit,
+smina. Device comes from config and is asserted at startup; nothing is
+hardcoded to CPU or GPU.
+
 ## Scientific framing
 
 **Docking scores are not experimental binding affinities.** A surrogate that
@@ -279,7 +319,7 @@ exhaustiveness are all config parameters.
 PYTHONPATH=src pytest tests -q
 ```
 
-91 tests covering data standardisation (including idempotence, since the
+106 tests covering data standardisation (including idempotence, since the
 canonical SMILES is the cache key), scaffold splitting (asserting no scaffold
 overlap between train and test, and that the guard fires on a deliberately
 leaky split), every metric against hand-computed values, calibration against

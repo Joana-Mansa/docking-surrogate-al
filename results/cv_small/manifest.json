@@ -1,0 +1,655 @@
+{
+  "active_learning": {
+    "final_top_k_recall": {
+      "greedy": {
+        "mean": 0.3625,
+        "std": 0.0530330086
+      },
+      "random": {
+        "mean": 0.325,
+        "std": 0.0353553391
+      },
+      "uncertainty": {
+        "mean": 0.3375,
+        "std": 0.0530330086
+      }
+    },
+    "retrospective": true,
+    "rounds": 2,
+    "seeds": [
+      0,
+      1
+    ],
+    "strategies": [
+      "uncertainty",
+      "greedy",
+      "random"
+    ]
+  },
+  "config": {
+    "al": {
+      "batch_size": 40,
+      "epochs_per_round": 20,
+      "initial_size": 60,
+      "rounds": 10,
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "strategies": [
+        "uncertainty",
+        "greedy",
+        "random"
+      ],
+      "top_k": 40
+    },
+    "data": {
+      "chembl": {
+        "max_alogp": 5.0,
+        "max_mw": 500.0,
+        "max_ro5_violations": 0,
+        "min_mw": 200.0,
+        "n_molecules": 525,
+        "page_size": 1000,
+        "retries": 4,
+        "timeout_s": 120
+      },
+      "csv_path": null,
+      "id_column": "chembl_id",
+      "max_docking_score": 0.0,
+      "max_heavy_atoms": 60,
+      "min_heavy_atoms": 8,
+      "neutralise": true,
+      "processed_path": "data/processed/cv_small.csv",
+      "raw_path": "data/raw/cv_run_raw.csv",
+      "smiles_column": "smiles",
+      "source": "chembl",
+      "strip_salts": true
+    },
+    "evaluation": {
+      "bootstrap_ci": 0.95,
+      "bootstrap_samples": 1000,
+      "calibration_bins": 10,
+      "ef_fractions": [
+        0.01,
+        0.05
+      ],
+      "precision_k": [
+        10,
+        50,
+        100
+      ],
+      "splits": [
+        "scaffold",
+        "random"
+      ],
+      "test_frac": 0.2,
+      "val_frac": 0.1
+    },
+    "model": {
+      "dropout": 0.15,
+      "hidden_dim": 128,
+      "num_layers": 4,
+      "pool": "mean_max",
+      "residual": true
+    },
+    "oracle": {
+      "backend": "smina",
+      "cache_path": "cache/docking_cache.jsonl",
+      "embed_max_attempts": 10,
+      "exhaustiveness": 8,
+      "ff_max_iters": 500,
+      "gnina_binary": "gnina",
+      "ligand_batch_size": 25,
+      "n_workers": null,
+      "num_modes": 9,
+      "seed": 0,
+      "smina_binary": "smina",
+      "timeout_s": 600
+    },
+    "run": {
+      "device": "auto",
+      "name": "cv_small",
+      "output_dir": "runs",
+      "seed": 0
+    },
+    "target": {
+      "center": [
+        -1.76,
+        14.46,
+        16.92
+      ],
+      "name": "trypsin_3ptb",
+      "receptor_pdb": "data/targets/trypsin_3ptb/receptor_raw.pdb",
+      "receptor_pdbqt": "data/targets/trypsin_3ptb/receptor.pdbqt",
+      "size": [
+        20.0,
+        20.0,
+        20.0
+      ]
+    },
+    "train": {
+      "amp": true,
+      "batch_size": 64,
+      "checkpoint_every_epoch": true,
+      "early_stopping_patience": 25,
+      "epochs": 150,
+      "grad_clip": 5.0,
+      "lr": 0.001,
+      "lr_scheduler_patience": 10,
+      "num_workers": 4,
+      "pin_memory": true,
+      "weight_decay": 1e-05
+    },
+    "uncertainty": {
+      "ddp": false,
+      "ddp_world_size": 1,
+      "ensemble_size": 5,
+      "mc_chunk": 10,
+      "mc_passes": 30,
+      "method": "mc_dropout"
+    }
+  },
+  "config_hash": "94b10963fbac202c9811a98534059ec6899daf6cec0ce344bf4a44499c1a8f93",
+  "created_utc": "2026-11-16T14:32:34+00:00",
+  "docking": {
+    "already_cached": 525,
+    "docked": 0,
+    "failed": 0,
+    "ligand_batch_size": 25,
+    "molecules_per_second": 0.0,
+    "requested": 525,
+    "succeeded": 0,
+    "wall_clock_s": 0.0,
+    "workers": 11
+  },
+  "docking_cache": {
+    "backend_counts": {
+      "smina:smina 2020.12.10 conda-forge:b08c07c   Built Jul 15 2025.  Based on AutoDock Vina 1.1.2.": 525
+    },
+    "cache_path": "/mnt/c/Users/joana/docking-surrogate-al/cache/docking_cache.jsonl",
+    "settings_fingerprint": "89f1eaffbd6aad3f92a629254a807cecfcf520d721be4c5348a40fe481f55150",
+    "status_counts": {
+      "ok": 525
+    },
+    "total_records": 525
+  },
+  "docking_quality": {
+    "best_score": -9.05151,
+    "fraction_non_physical": 0.0,
+    "n_non_physical_positive": 0,
+    "n_scored": 525,
+    "worst_score": -4.7729
+  },
+  "env": {
+    "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+    "CUDA_VISIBLE_DEVICES": null
+  },
+  "evaluation": {
+    "metric_definitions": {
+      "ef_definition": "actives = top `fraction` by true score; EF = hit_rate / fraction",
+      "ef_fractions": [
+        0.01,
+        0.05
+      ],
+      "precision_k": [
+        10,
+        50,
+        100
+      ],
+      "sign_convention": "more negative docking score is better; top = most negative"
+    },
+    "splits": {
+      "random": {
+        "calibration": {
+          "bin_counts": [
+            11,
+            10,
+            11,
+            10,
+            10,
+            11,
+            10,
+            11,
+            10,
+            11
+          ],
+          "bin_mean_sigma": [
+            0.06394157761877234,
+            0.08468046635389329,
+            0.09998552636666731,
+            0.10910555571317673,
+            0.1210765466094017,
+            0.13009672408754175,
+            0.14407564252614974,
+            0.15469734777103772,
+            0.17080335915088654,
+            0.2294764911586588
+          ],
+          "bin_rmse": [
+            0.49829495458661094,
+            0.5237422126306691,
+            0.6280038299943802,
+            0.4000188700364864,
+            0.3425512179817371,
+            0.5031791834295463,
+            0.6463008274694497,
+            0.6841978225780226,
+            0.5647475628332608,
+            0.493312251758481
+          ],
+          "ece_definition": "mean |observed - nominal| central-interval coverage over equally spaced nominal levels, assuming a Gaussian predictive distribution",
+          "expected_calibration_error": 0.3657142857142857,
+          "mean_sigma": 0.1310246670529956,
+          "miscalibration_area": 0.30259740259740253,
+          "nominal_levels": [
+            0.09090909090909091,
+            0.18181818181818182,
+            0.2727272727272727,
+            0.36363636363636365,
+            0.4545454545454545,
+            0.5454545454545454,
+            0.6363636363636364,
+            0.7272727272727272,
+            0.8181818181818181,
+            0.9090909090909091
+          ],
+          "observed_coverage": [
+            0.02857142857142857,
+            0.0380952380952381,
+            0.05714285714285714,
+            0.09523809523809523,
+            0.11428571428571428,
+            0.13333333333333333,
+            0.1523809523809524,
+            0.17142857142857143,
+            0.23809523809523808,
+            0.3142857142857143
+          ],
+          "rmse": 0.5395238173022571,
+          "sigma_error_spearman": 0.0378187849885963
+        },
+        "metrics": {
+          "ef_01": {
+            "ci_high": 100.0,
+            "ci_level": 0.95,
+            "ci_low": 0.0,
+            "metric": "ef_01",
+            "n_resamples": 1000,
+            "n_valid_resamples": 1000,
+            "value": 0.0
+          },
+          "ef_05": {
+            "ci_high": 20.0,
+            "ci_level": 0.95,
+            "ci_low": 4.0,
+            "metric": "ef_05",
+            "n_resamples": 1000,
+            "n_valid_resamples": 1000,
+            "value": 11.999999999999998
+          },
+          "mae": {
+            "ci_high": 0.48766407476875673,
+            "ci_level": 0.95,
+            "ci_low": 0.3577149795871917,
+            "metric": "mae",
+            "n_resamples": 1000,
+            "n_valid_resamples": 1000,
+            "value": 0.42349286179896767
+          },
+          "pearson_r": {
+            "ci_high": 0.8572249382559063,
+            "ci_level": 0.95,
+            "ci_low": 0.6942638201768625,
+            "metric": "pearson_r",
+            "n_resamples": 1000,
+            "n_valid_resamples": 1000,
+            "value": 0.787495741438039
+          },
+          "precision_at_10": {
+            "ci_high": 0.8,
+            "ci_level": 0.95,
+            "ci_low": 0.3,
+            "metric": "precision_at_10",
+            "n_resamples": 1000,
+            "n_valid_resamples": 1000,
+            "value": 0.6
+          },
+          "precision_at_100": {
+            "ci_high": 1.0,
+            "ci_level": 0.95,
+            "ci_low": 0.96,
+            "metric": "precision_at_100",
+            "n_resamples": 1000,
+            "n_valid_resamples": 1000,
+            "value": 0.98
+          },
+          "precision_at_50": {
+            "ci_high": 0.84,
+            "ci_level": 0.95,
+            "ci_low": 0.64,
+            "metric": "precision_at_50",
+            "n_resamples": 1000,
+            "n_valid_resamples": 1000,
+            "value": 0.74
+          },
+          "rmse": {
+            "ci_high": 0.6195130405838641,
+            "ci_level": 0.95,
+            "ci_low": 0.4550196438359261,
+            "metric": "rmse",
+            "n_resamples": 1000,
+            "n_valid_resamples": 1000,
+            "value": 0.5395238173022571
+          },
+          "spearman_rho": {
+            "ci_high": 0.8304747315145928,
+            "ci_level": 0.95,
+            "ci_low": 0.6183458932386224,
+            "metric": "spearman_rho",
+            "n_resamples": 1000,
+            "n_valid_resamples": 1000,
+            "value": 0.7410118183703088
+          }
+        },
+        "n_test": 105,
+        "seed": 0,
+        "uncertainty_method": "mc_dropout"
+      },
+      "scaffold": {
+        "calibration": {
+          "bin_counts": [
+            11,
+            10,
+            11,
+            10,
+            10,
+            11,
+            10,
+            11,
+            10,
+            11
+          ],
+          "bin_mean_sigma": [
+            0.10457044772126457,
+            0.12105104476213455,
+            0.13294496861371127,
+            0.1428656205534935,
+            0.1552747517824173,
+            0.16602991250428287,
+            0.17612170577049255,
+            0.19812984493645755,
+            0.22231436669826507,
+            0.25579246201298456
+          ],
+          "bin_rmse": [
+            0.3403630220245125,
+            0.3776095725228968,
+            0.4806565932674042,
+            0.5353443734684331,
+            0.3263390475868429,
+            0.3582782982388272,
+            0.46131686379166326,
+            0.5513438044105508,
+            0.6232118520967339,
+            0.733893705918378
+          ],
+          "ece_definition": "mean |observed - nominal| central-interval coverage over equally spaced nominal levels, assuming a Gaussian predictive distribution",
+          "expected_calibration_error": 0.27809523809523806,
+          "mean_sigma": 0.16769922751755942,
+          "miscalibration_area": 0.23030303030303026,
+          "nominal_levels": [
+            0.09090909090909091,
+            0.18181818181818182,
+            0.2727272727272727,
+            0.36363636363636365,
+            0.4545454545454545,
+            0.5454545454545454,
+            0.6363636363636364,
+            0.7272727272727272,
+            0.8181818181818181,
+            0.9090909090909091
+          ],
+          "observed_coverage": [
+            0.0380952380952381,
+            0.08571428571428572,
+            0.11428571428571428,
+            0.12380952380952381,
+            0.19047619047619047,
+            0.21904761904761905,
+            0.26666666666666666,
+            0.3238095238095238,
+            0.3904761904761905,
+            0.4666666666666667
+          ],
+          "rmse": 0.49631875091691163,
+          "sigma_error_spearman": 0.0016068836823553805
+        },
+        "metrics": {
+          "ef_01": {
+            "ci_high": 0.0,
+            "ci_level": 0.95,
+            "ci_low": 0.0,
+            "metric": "ef_01",
+            "n_resamples": 1000,
+            "n_valid_resamples": 1000,
+            "value": 0.0
+          },
+          "ef_05": {
+            "ci_high": 11.999999999999998,
+            "ci_level": 0.95,
+            "ci_low": 0.0,
+            "metric": "ef_05",
+            "n_resamples": 1000,
+            "n_valid_resamples": 1000,
+            "value": 4.0
+          },
+          "mae": {
+            "ci_high": 0.43118138715562376,
+            "ci_level": 0.95,
+            "ci_low": 0.31061978671558915,
+            "metric": "mae",
+            "n_resamples": 1000,
+            "n_valid_resamples": 1000,
+            "value": 0.369075931254069
+          },
+          "pearson_r": {
+            "ci_high": 0.8016561122215732,
+            "ci_level": 0.95,
+            "ci_low": 0.5478541028094517,
+            "metric": "pearson_r",
+            "n_resamples": 1000,
+            "n_valid_resamples": 1000,
+            "value": 0.6849913226746885
+          },
+          "precision_at_10": {
+            "ci_high": 0.7,
+            "ci_level": 0.95,
+            "ci_low": 0.1,
+            "metric": "precision_at_10",
+            "n_resamples": 1000,
+            "n_valid_resamples": 1000,
+            "value": 0.5
+          },
+          "precision_at_100": {
+            "ci_high": 0.97,
+            "ci_level": 0.95,
+            "ci_low": 0.95,
+            "metric": "precision_at_100",
+            "n_resamples": 1000,
+            "n_valid_resamples": 1000,
+            "value": 0.95
+          },
+          "precision_at_50": {
+            "ci_high": 0.88,
+            "ci_level": 0.95,
+            "ci_low": 0.72,
+            "metric": "precision_at_50",
+            "n_resamples": 1000,
+            "n_valid_resamples": 1000,
+            "value": 0.82
+          },
+          "rmse": {
+            "ci_high": 0.5887104963586686,
+            "ci_level": 0.95,
+            "ci_low": 0.40584798327576205,
+            "metric": "rmse",
+            "n_resamples": 1000,
+            "n_valid_resamples": 1000,
+            "value": 0.49631875091691163
+          },
+          "spearman_rho": {
+            "ci_high": 0.8325149420360132,
+            "ci_level": 0.95,
+            "ci_low": 0.5630281411444816,
+            "metric": "spearman_rho",
+            "n_resamples": 1000,
+            "n_valid_resamples": 1000,
+            "value": 0.7136429608127721
+          }
+        },
+        "n_test": 105,
+        "seed": 0,
+        "uncertainty_method": "mc_dropout"
+      }
+    }
+  },
+  "git": {
+    "branch": "main",
+    "commit": "a5218d6ef2864b3d92d8fa23629e2b9825da4be8",
+    "dirty": true
+  },
+  "hardware": {
+    "cpu_count": 12,
+    "cuda_available": true,
+    "cudnn_version": 8801,
+    "device_type": "cuda",
+    "gpu_capability": "8.6",
+    "gpu_count": 1,
+    "gpu_driver_version": null,
+    "gpu_name": "NVIDIA GeForce RTX 3050 6GB Laptop GPU",
+    "gpu_total_vram_mb": 6143.5,
+    "platform": "Windows-10-10.0.26300-SP0",
+    "python_version": "3.10.18",
+    "torch_cuda_version": "12.1",
+    "torch_version": "2.3.0"
+  },
+  "last_stage_group": "run-al",
+  "oracle_preparation": {
+    "atom_records_kept": 1629,
+    "hetatm_records_dropped": 72,
+    "receptor_used": "/mnt/c/Users/joana/docking-surrogate-al/data/targets/trypsin_3ptb/receptor.pdbqt",
+    "smina_version": "smina 2020.12.10 conda-forge:b08c07c   Built Jul 15 2025.  Based on AutoDock Vina 1.1.2."
+  },
+  "packages": {
+    "matplotlib": "3.10.0",
+    "numpy": "1.26.4",
+    "pandas": "2.3.1",
+    "rdkit": "2024.3.5",
+    "scipy": "1.10.1",
+    "torch": "2.3.0",
+    "torch-geometric": "2.5.3"
+  },
+  "pool": {
+    "docked_molecules": 525,
+    "excluded_non_physical": 0,
+    "max_docking_score": 0.0,
+    "pool_size": 525
+  },
+  "run_name": "cv_small",
+  "seed": 0,
+  "stages": {
+    "dock": {
+      "device": "cpu",
+      "finished_utc": "2026-11-16T15:15:19+00:00",
+      "peak_allocated_mb": null,
+      "peak_reserved_mb": null,
+      "samples": 0,
+      "samples_per_second": null,
+      "stage": "dock",
+      "wall_clock_s": 0.001
+    },
+    "evaluate": {
+      "device": "cuda",
+      "finished_utc": "2026-11-16T15:18:24+00:00",
+      "peak_allocated_mb": 410.2,
+      "peak_reserved_mb": 674.0,
+      "samples": 210,
+      "samples_per_second": 16.07,
+      "stage": "evaluate",
+      "wall_clock_s": 13.071
+    },
+    "run_al": {
+      "device": "cuda",
+      "finished_utc": "2026-11-16T14:43:40+00:00",
+      "peak_allocated_mb": 454.2,
+      "peak_reserved_mb": 574.0,
+      "samples": 18,
+      "samples_per_second": 0.11,
+      "stage": "run_al",
+      "wall_clock_s": 162.612
+    },
+    "train_random": {
+      "device": "cuda",
+      "finished_utc": "2026-11-16T15:17:37+00:00",
+      "peak_allocated_mb": 115.4,
+      "peak_reserved_mb": 130.0,
+      "samples": 25024,
+      "samples_per_second": 632.44,
+      "stage": "train_random",
+      "wall_clock_s": 39.568
+    },
+    "train_scaffold": {
+      "device": "cuda",
+      "finished_utc": "2026-11-16T15:16:56+00:00",
+      "peak_allocated_mb": 115.4,
+      "peak_reserved_mb": 128.0,
+      "samples": 17664,
+      "samples_per_second": 471.95,
+      "stage": "train_scaffold",
+      "wall_clock_s": 37.427
+    }
+  },
+  "training": {
+    "random": {
+      "amp_enabled": true,
+      "best_val_loss": 0.306898295879364,
+      "sizes": {
+        "test": 105,
+        "train": 368,
+        "val": 52
+      },
+      "timing": {
+        "device": "cuda",
+        "peak_allocated_mb": 115.4,
+        "peak_reserved_mb": 130.0,
+        "samples": 25024,
+        "samples_per_second": 632.44,
+        "stage": "train",
+        "wall_clock_s": 39.568
+      }
+    },
+    "scaffold": {
+      "amp_enabled": true,
+      "best_val_loss": 0.15205062925815582,
+      "sizes": {
+        "test": 105,
+        "train": 368,
+        "val": 52
+      },
+      "timing": {
+        "device": "cuda",
+        "peak_allocated_mb": 115.4,
+        "peak_reserved_mb": 128.0,
+        "samples": 17664,
+        "samples_per_second": 471.95,
+        "stage": "train",
+        "wall_clock_s": 37.427
+      }
+    }
+  },
+  "updated_utc": "2026-11-16T15:19:06+00:00"
+}

@@ -16,6 +16,76 @@ does uncertainty-guided selection save against a random baseline.
 > This project makes no claim about real binding affinity or therapeutic
 > relevance.
 
+## Results
+
+A **reduced run: 525 molecules** docked against trypsin 3PTB at exhaustiveness 8,
+not the 5,000 the default config specifies. Docking measured **126.7 CPU-seconds
+per molecule** (median 121.5), so the full pool is ~105 CPU-hours and did not fit
+the machine-day available. Everything below is in [`results/cv_small/`](results/cv_small),
+with the config hash, git commit and hardware in its `manifest.json`.
+
+Scores span -9.05 to -4.77 kcal/mol (SD 0.79), and **0 of 525 were non-physical**.
+
+### Surrogate fidelity
+
+95% bootstrap CIs, 1000 resamples, n_test = 105.
+
+| Metric | Scaffold split | Random split |
+| --- | --- | --- |
+| RMSE (kcal/mol) | 0.496 [0.406, 0.589] | 0.540 [0.455, 0.620] |
+| MAE (kcal/mol) | 0.369 [0.311, 0.431] | 0.423 [0.358, 0.488] |
+| Spearman rho | 0.714 [0.563, 0.833] | 0.741 [0.618, 0.830] |
+| Precision@10 | 0.500 [0.100, 0.700] | 0.600 [0.300, 0.800] |
+| Precision@50 | 0.820 [0.720, 0.880] | 0.740 [0.640, 0.840] |
+
+A scaffold RMSE of 0.50 against a target SD of 0.79 means the surrogate captures
+real variance rather than predicting the mean. The parity plot shows clear
+regression to the mean: predictions span a narrower range than the truth, so the
+model is conservative at both tails.
+
+![Scaffold-split parity](results/cv_small/figures/scaffold_parity.png)
+
+Scaffold and random come out close here, closer than the usual expectation that
+scaffold is markedly harder. At 105 test molecules the confidence intervals
+overlap heavily, so this run does not establish a gap in either direction.
+
+**EF@1% and precision@100 are excluded from the table**, though both are in
+`metrics.csv`. With 105 test molecules the top 1% is a single molecule, so EF@1%
+can only take the value 0 or 100; its bootstrap CI came back [0, 0] and [0, 100].
+Precision@100 asks for more molecules than the test set holds. Neither is
+meaningful at this sample size, and quoting them would be dressing up noise.
+
+### Calibration: the uncertainty does not work
+
+The clearest result of this run is a negative one.
+
+| | Scaffold | Random |
+| --- | --- | --- |
+| Expected calibration error | 0.278 | 0.366 |
+| Miscalibration area | 0.230 | 0.303 |
+| Spearman(sigma, abs error) | **0.002** | **0.038** |
+| Mean predicted sigma | 0.168 | 0.131 |
+
+Two things are wrong, and the second is the serious one.
+
+The model is **overconfident by roughly 3x**: mean predicted sigma is 0.168 while
+actual RMSE is 0.496. More importantly, predicted uncertainty has **no rank
+correlation with actual error** (Spearman 0.002 and 0.038). The uncertainty
+estimate is not merely mis-scaled, which recalibration would fix; it carries
+almost no information about which predictions are wrong.
+
+This is reported rather than buried because it is the measurement the calibration
+code exists to make, and because it directly predicts the active-learning outcome
+below: acquisition by an uncertainty signal that does not track error has no
+mechanism by which to beat random selection.
+
+Plausible causes, untested here: 525 molecules is small for MC-dropout to
+separate epistemic uncertainty from noise, and dropout 0.15 may be too low to
+produce meaningful predictive spread. A deep ensemble (`uncertainty.method:
+ensemble`) is the obvious comparison and has not been run.
+
+![Reliability and error-vs-sigma](results/cv_small/figures/reliability.png)
+
 ## Quickstart
 
 ```bash

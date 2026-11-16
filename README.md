@@ -6,10 +6,17 @@ A graph neural network that predicts molecular docking scores, and an
 uncertainty-guided active-learning loop that reaches the top-scoring compounds
 in a library using fewer docking calls than random selection.
 
-Docking is expensive: tens of CPU-seconds per molecule, so a million-compound
-screen is CPU-months. This measures two things. How faithfully can a GNN
-reproduce the docking oracle on unseen scaffolds, and how many oracle calls
-does uncertainty-guided selection save against a random baseline.
+Docking is expensive: **126.7 CPU-seconds per molecule** measured here, so a
+million-compound screen is CPU-months. This measures two things. How faithfully
+can a GNN reproduce the docking oracle on unseen scaffolds, and how many oracle
+calls does model-guided selection save against a random baseline.
+
+On a 525-molecule pool, the surrogate reaches **Spearman 0.71 on a scaffold
+split** (RMSE 0.50 kcal/mol against a target SD of 0.79), and model-guided
+acquisition reaches 80% top-40 recall with **47% fewer oracle calls** than
+random. The MC-dropout uncertainty estimates, measured rather than assumed,
+turned out to be **badly calibrated and uninformative about error** - reported
+below alongside the results they undercut.
 
 > **Docking scores are not experimental binding affinities.** A surrogate that
 > predicts docking well has learned to imitate docking, including its errors.
@@ -54,6 +61,51 @@ overlap heavily, so this run does not establish a gap in either direction.
 can only take the value 0 or 100; its bootstrap CI came back [0, 0] and [0, 100].
 Precision@100 asks for more molecules than the test set holds. Neither is
 meaningful at this sample size, and quoting them would be dressing up noise.
+
+### Active learning
+
+Top-40 recall against oracle calls, 3 strategies x 5 seeds x 10 rounds, band is
+mean +- 1 SD across seeds. 60 seed molecules, then 40 per round.
+
+![Top-40 recall vs oracle calls](results/cv_small/figures/active_learning.png)
+
+Oracle calls to reach a given recall, interpolated from the mean curves:
+
+| Target recall | greedy | uncertainty | random |
+| --- | --- | --- | --- |
+| 50% | 137 (**52% fewer**) | 200 (**30% fewer**) | 284 |
+| 80% | 222 (**47% fewer**) | 312 (**26% fewer**) | 420 |
+| 90% | 273 | 360 | never reached |
+
+Both active strategies beat random, and the bands separate cleanly through the
+middle of the curve. Random does exactly what theory says it should: it recovers
+close to the fraction of the pool it has labelled (0.845 recall at 460 calls,
+which is 87.6% of the pool), which is why it is the baseline worth beating
+rather than a formality.
+
+**Greedy beats uncertainty, and that is expected rather than a surprise.**
+Top-k recall rewards spending every call in the region the metric scores, which
+is what greedy does by construction. Uncertainty sampling is trying to build a
+better model, not to find good molecules, so it pays calls for information that
+this particular metric does not reward. The two are reported separately rather
+than collapsed into one "active learning wins" claim.
+
+**One result here contradicts the calibration section above.** Given that
+predicted sigma had essentially no rank correlation with error on held-out data
+(0.002 and 0.038), uncertainty sampling had no obvious mechanism by which to
+beat random, and it beat it comfortably. The two measurements are not strictly
+comparable: the calibration numbers come from a model trained on 368 molecules
+and scored on held-out test data, while acquisition ranks *unlabelled pool*
+molecules using models trained on 60 to 460. Whatever the sigma ranking is
+picking up on in that regime, this experiment does not establish what it is,
+and the honest summary is that the uncertainty signal is useful for acquisition
+while being uninformative about error magnitude.
+
+**The budgets here are unusually large relative to the pool.** The curve spans
+11% to 88% of the library labelled, because the pool is 525 molecules. A real
+campaign labels a far smaller fraction, where every curve would sit in the
+steep early region and the gaps between strategies would be the part that
+matters. Treat the shape as indicative, not as a transferable saving.
 
 ### Calibration: the uncertainty does not work
 
